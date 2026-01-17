@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  # MySQL Database (same as production)
+  db:
+    image: mysql:8.0
+    container_name: gleentforms-db-dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-gleentforms}
+      MYSQL_USER: ${DB_USER:-gleentforms_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-rootpassword}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - db_data_dev:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Python Backend (development mode with hot reload)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: gleentforms-backend-dev
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-gleentforms}
+      DB_USER: ${DB_USER:-gleentforms_user}
+      DB_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      DB_PORT: 3306
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key}
+      FLASK_ENV: development
+      FLASK_APP: backend/app.py
+      FLASK_DEBUG: 1
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./database:/app/database
+    command: >
+      sh -c "
+        echo 'Waiting for database to be ready...' &&
+        sleep 10 &&
+        python database/init_db.py || echo 'Database initialization skipped' &&
+        python backend/app.py
+      "
+
+  # React Frontend (development mode with hot reload)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.dev
+    container_name: gleentforms-frontend-dev
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    depends_on:
+      - backend
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://backend:5000
+    volumes:
+      # Mount source code directories (changes will be saved)
+      - ./client:/app/client:cached
+      - ./shared:/app/shared:cached
+      - ./server:/app/server:cached
+      - ./public:/app/public:cached
+      # Mount config files
+      - ./package.json:/app/package.json:ro
+      - ./pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./vite.config.server.ts:/app/vite.config.server.ts:ro
+      - ./tailwind.config.ts:/app/tailwind.config.ts:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./postcss.config.js:/app/postcss.config.js:ro
+      - ./components.json:/app/components.json:ro
+      - ./index.html:/app/index.html:ro
+      # Exclude node_modules from mount (use container's version)
+      - /app/node_modules
+      - /app/client/node_modules
+    working_dir: /app
+    command: pnpm dev --host 0.0.0.0
+
+volumes:
+  db_data_dev:
+
+networks:
+  default:
+    name: gleentforms-network-dev
+
