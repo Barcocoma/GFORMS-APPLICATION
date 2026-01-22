@@ -37,6 +37,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
   const isIndexPage = location.pathname === "/";
   const isAdminPage = location.pathname.startsWith("/admin");
   const isFormDetailPage = location.pathname.startsWith("/forms/");
+  const isProfilePage = location.pathname === "/profile";
   const { user, logout, token } = useAuth();
   const [searchValue, setSearchValue] = useState("");
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -256,6 +257,9 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
   };
 
   const buttonConfig = getButtonConfig();
+  
+  // Don't show Create Form button on profile page
+  const shouldShowCreateButton = !isCreatePage && !isIndexPage && !isFormDetailPage && !isAdminPage && !isProfilePage;
 
   return (
     <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-gray-200/60 shadow-sm">
@@ -324,7 +328,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
         )}
 
         <div className="flex items-center gap-3">
-        {!isCreatePage && !isIndexPage && !isFormDetailPage && !isAdminPage && (
+        {shouldShowCreateButton && (
           <Link to={buttonConfig.link}>
             <Button className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white gap-2 shadow-md hover:shadow-lg transition-all duration-200">
               {buttonConfig.icon}
