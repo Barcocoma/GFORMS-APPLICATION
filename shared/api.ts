@@ -37,6 +37,15 @@ export interface AuthVerifyResponse {
   user: User;
 }
 
+export interface UpdateProfileRequest {
+  username: string;
+}
+
+export interface UpdateProfileResponse {
+  user: User;
+  message: string;
+}
+
 /**
  * Admin types
  */
@@ -91,6 +100,20 @@ export interface ConditionalLogic {
   operator?: 'equals' | 'contains' | 'not_equals'; // How to compare the answer
 }
 
+export interface ConditionalSectionNavigation {
+  questionId?: string; // Question ID that triggers the navigation
+  answer?: string | string[]; // Answer value(s) that trigger navigation to this section
+  operator?: 'equals' | 'contains' | 'not_equals'; // How to compare the answer
+}
+
+export interface FormSection {
+  id?: string | number;
+  title: string;
+  description?: string;
+  conditionalNavigation?: ConditionalSectionNavigation; // Conditional navigation rules
+  display_order?: number;
+}
+
 export interface FormQuestion {
   id?: string;
   title: string;
@@ -105,6 +128,7 @@ export interface FormQuestion {
   conditionalLogic?: ConditionalLogic; // Conditional logic rules
   correctAnswer?: string | string[]; // Correct answer(s) for quiz mode
   points?: number; // Points for this question (default: 1)
+  sectionId?: string | number | null; // Section this question belongs to
 }
 
 export interface CreateFormRequest {
@@ -116,9 +140,13 @@ export interface CreateFormRequest {
   is_quiz?: boolean; // Enable quiz mode
   points_per_question?: number; // Default points per question (default: 1)
   questions: FormQuestion[];
+  sections?: FormSection[]; // Form sections
   theme_color?: string;
   theme_background?: string;
   header_image_url?: string;
+  email_notifications_enabled?: boolean; // Enable email notifications
+  email_notification_recipients?: string; // Comma-separated email addresses
+  send_confirmation_email?: boolean; // Send confirmation email to submitter
 }
 
 export interface CreateFormResponse {

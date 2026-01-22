@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { AdminStats } from '@shared/api';
-import { Layout } from '@/components/layout/Layout';
+import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Users, FileText, ClipboardList, Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -59,13 +59,15 @@ export default function AdminDashboard() {
   }
 
   return (
-    <Layout>
+    <AdminLayout>
       <div className="space-y-8">
         <div className="space-y-2">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-slate-50 via-slate-100 to-slate-200 bg-clip-text text-transparent">
             Admin Dashboard
           </h1>
-          <p className="text-gray-600 text-lg">Overview of system statistics and management</p>
+          <p className="text-slate-200 text-lg">
+            Overview of system statistics and management
+          </p>
         </div>
 
         {/* Stats Cards */}
@@ -115,7 +117,9 @@ export default function AdminDashboard() {
 
         {/* Quick Actions */}
         <div className="space-y-4">
-          <h2 className="text-2xl font-bold text-gray-900">Quick Actions</h2>
+          <h2 className="text-2xl font-bold text-white drop-shadow-sm">
+            Quick Actions
+          </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Link to="/admin/users">
               <Card className="hover:shadow-xl cursor-pointer transition-all duration-300 border-2 hover:border-primary/30 h-full">
@@ -155,7 +159,7 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>
-    </Layout>
+    </AdminLayout>
   );
 }
 

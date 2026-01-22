@@ -103,12 +103,12 @@ export function FormCard({
   return (
     <>
       <Link to={linkPath} className="block h-full">
-      <div className="bg-white rounded-xl border border-gray-200 hover:border-primary/30 hover:shadow-xl transition-all duration-300 overflow-hidden group h-full flex flex-col">
+      <div className="bg-gray-100 rounded-xl border border-gray-300 hover:border-primary/30 hover:shadow-xl transition-all duration-300 overflow-hidden group h-full flex flex-col">
         {/* Form preview area */}
-        <div className="h-36 bg-gradient-to-br from-primary via-primary/90 to-primary/80 flex items-center justify-center relative overflow-hidden">
+        <div className="h-36 bg-gradient-to-br from-gray-300 via-gray-200 to-gray-300 flex items-center justify-center relative overflow-hidden">
           <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
           <div className="text-center relative z-10">
-            <div className="text-5xl font-light text-white/90">📋</div>
+            <div className="text-5xl font-light text-gray-600">📋</div>
           </div>
           <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
             <DropdownMenu>
@@ -116,7 +116,7 @@ export function FormCard({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 w-8 p-0 bg-white/90 hover:bg-white text-gray-700 shadow-sm"
+                  className="h-8 w-8 p-0 bg-gray-200/90 hover:bg-gray-200 text-gray-700 shadow-sm"
                   onClick={(e) => e.preventDefault()}
                 >
                   <MoreVertical className="h-4 w-4" />

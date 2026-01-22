@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Form } from '@shared/api';
-import { Layout } from '@/components/layout/Layout';
+import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +14,8 @@ export default function AdminForms() {
   const [forms, setForms] = useState<Form[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [sortField, setSortField] = useState<'id' | 'title' | 'username' | 'created_at'>('id');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   useEffect(() => {
     fetchForms();
@@ -41,6 +43,33 @@ export default function AdminForms() {
     }
   };
 
+  const sortedForms = [...forms].sort((a, b) => {
+    let aVal: string | number = a[sortField === 'username' ? 'username' : sortField];
+    let bVal: string | number = b[sortField === 'username' ? 'username' : sortField];
+
+    if (sortField === 'created_at') {
+      aVal = new Date(a.created_at).getTime();
+      bVal = new Date(b.created_at).getTime();
+    }
+
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      const cmp = aVal.localeCompare(bVal);
+      return sortDirection === 'asc' ? cmp : -cmp;
+    }
+
+    const cmp = (aVal as number) - (bVal as number);
+    return sortDirection === 'asc' ? cmp : -cmp;
+  });
+
+  const handleSort = (field: 'id' | 'title' | 'username' | 'created_at') => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -50,20 +79,22 @@ export default function AdminForms() {
   }
 
   return (
-    <Layout>
+    <AdminLayout>
       <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="space-y-2">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent flex items-center gap-3">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-slate-50 via-slate-100 to-slate-200 bg-clip-text text-transparent flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-green-100 flex items-center justify-center">
               <FileText className="h-7 w-7 text-green-600" />
             </div>
             Manage Forms
           </h1>
-          <p className="text-gray-600 text-lg">View and manage all forms created by users</p>
+          <p className="text-slate-200 text-lg">View and manage all forms created by users</p>
         </div>
         <Link to="/admin">
-          <Button variant="outline" className="border-gray-300">Back to Dashboard</Button>
+          <Button className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white shadow-md hover:shadow-lg transition-all duration-200">
+            Back to Dashboard
+          </Button>
         </Link>
       </div>
 
@@ -82,11 +113,31 @@ export default function AdminForms() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50/50">
-                <TableHead className="font-semibold">ID</TableHead>
-                <TableHead className="font-semibold">Title</TableHead>
-                <TableHead className="font-semibold">Created By</TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('id')}
+                >
+                  ID {sortField === 'id' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('title')}
+                >
+                  Title {sortField === 'title' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('username')}
+                >
+                  Created By {sortField === 'username' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
                 <TableHead className="font-semibold">Status</TableHead>
-                <TableHead className="font-semibold">Created At</TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('created_at')}
+                >
+                  Created At {sortField === 'created_at' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -97,7 +148,7 @@ export default function AdminForms() {
                   </TableCell>
                 </TableRow>
               ) : (
-                forms.map((form) => (
+                sortedForms.map((form) => (
                   <TableRow key={form.id}>
                     <TableCell>{form.id}</TableCell>
                     <TableCell className="font-medium">{form.title}</TableCell>
@@ -118,7 +169,7 @@ export default function AdminForms() {
         </CardContent>
       </Card>
       </div>
-    </Layout>
+    </AdminLayout>
   );
 }
 

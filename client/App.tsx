@@ -15,6 +15,7 @@ import AdminDashboard from "./pages/admin/Dashboard";
 import AdminUsers from "./pages/admin/Users";
 import AdminForms from "./pages/admin/Forms";
 import AdminSubmissions from "./pages/admin/Submissions";
+import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,7 +27,7 @@ export default function App() {
       <TooltipProvider>
         <Toaster />
         <Sonner />
-        <BrowserRouter>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <Routes>
               <Route path="/login" element={<Login />} />
               <Route
@@ -63,11 +64,7 @@ export default function App() {
               />
               <Route
                 path="/form/:shareToken"
-                element={
-                  <ProtectedRoute>
-                    <SharedFormView />
-                  </ProtectedRoute>
-                }
+                element={<SharedFormView />}
               />
               <Route
                 path="/admin"
@@ -98,6 +95,14 @@ export default function App() {
                 element={
                   <ProtectedRoute requiredRole="admin">
                     <AdminSubmissions />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/profile"
+                element={
+                  <ProtectedRoute>
+                    <Profile />
                   </ProtectedRoute>
                 }
               />

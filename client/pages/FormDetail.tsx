@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { ResponsesView } from "@/components/forms/ResponsesView";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +44,7 @@ interface FormData {
   share_token: string;
   submission_count: number;
   is_quiz?: boolean;
+  requires_login?: boolean;
   questions: FormQuestion[];
 }
 
@@ -57,6 +60,8 @@ export default function FormDetail() {
   const [copied, setCopied] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [requiresLogin, setRequiresLogin] = useState(true);
+  const [isUpdatingRequiresLogin, setIsUpdatingRequiresLogin] = useState(false);
 
   useEffect(() => {
     if (formId) {
@@ -103,6 +108,7 @@ export default function FormDetail() {
 
       const data = await response.json();
       setForm(data);
+      setRequiresLogin(data.requires_login !== undefined ? data.requires_login : true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load form. Please check your connection and try again.');
     } finally {
@@ -120,6 +126,51 @@ export default function FormDetail() {
         title: "Copied!",
         description: "Shareable link copied to clipboard",
       });
+    }
+  };
+
+  const handleRequiresLoginChange = async (checked: boolean) => {
+    if (!form || !token) return;
+    
+    setIsUpdatingRequiresLogin(true);
+    try {
+      const response = await fetch(`/api/forms/${form.id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: form.title,
+          description: form.description || '',
+          questions: form.questions.map(q => ({
+            title: q.question_text,
+            type: q.question_type,
+            required: q.is_required,
+            options: q.options || []
+          })),
+          requires_login: checked
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update setting');
+      }
+
+      setRequiresLogin(checked);
+      setForm({ ...form, requires_login: checked });
+      toast({
+        title: "Setting Updated",
+        description: checked ? "Users must log in to access this form" : "Form can be accessed without login",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to update setting',
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingRequiresLogin(false);
     }
   };
 
@@ -277,8 +328,8 @@ export default function FormDetail() {
     return (
       <Layout>
         <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-gray-600 text-sm">Loading form details...</p>
+          <Loader2 className="h-8 w-8 animate-spin text-white" />
+          <p className="text-slate-200 text-sm">Loading form details...</p>
         </div>
       </Layout>
     );
@@ -336,7 +387,7 @@ export default function FormDetail() {
               variant="ghost"
               size="sm"
               onClick={() => navigate("/")}
-                    className="p-0 h-10 w-10 hover:bg-gray-100 rounded-lg shrink-0 flex-shrink-0"
+                    className="p-0 h-10 w-10 rounded-lg shrink-0 flex-shrink-0 bg-white text-slate-900 hover:bg-slate-100 hover:text-slate-900"
                     aria-label="Back to forms"
             >
                     <ArrowLeft className="w-5 h-5" />
@@ -347,11 +398,11 @@ export default function FormDetail() {
                 </TooltipContent>
               </Tooltip>
               <div className="flex-1 min-w-0 pr-2">
-                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent break-words leading-tight">
+                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-slate-50 via-slate-100 to-slate-200 bg-clip-text text-transparent break-words leading-tight">
                 {form.title}
               </h1>
                 {form.description && (
-                  <p className="text-gray-600 mt-2 text-sm sm:text-base break-words">{form.description}</p>
+                  <p className="text-slate-200 mt-2 text-sm sm:text-base break-words">{form.description}</p>
                 )}
               </div>
             </div>
@@ -361,7 +412,7 @@ export default function FormDetail() {
                   <Button
                     variant="outline"
                     onClick={copyShareLink}
-                    className="gap-2 border-gray-300 hover:bg-gray-50"
+                    className="gap-2 border-gray-300 bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 focus-visible:text-slate-900"
                   >
                     {copied ? (
                       <>
@@ -428,19 +479,19 @@ export default function FormDetail() {
           </div>
 
           {/* Share Link Card */}
-          <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50/50 to-indigo-50/50">
+          <Card className="border border-white/20 shadow-lg bg-white/95 backdrop-blur">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
-                <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-600/10 flex items-center justify-center shrink-0">
                   <Share2 className="w-5 h-5 text-blue-600" />
                 </div>
                 Shareable Link
               </CardTitle>
-              <CardDescription className="text-base">
+              <CardDescription className="text-base text-slate-600">
                 Share this link with others to collect responses. Anyone with this link can submit responses.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <div className="flex gap-2 items-center">
                 <Input 
                   value={shareUrl} 
@@ -448,38 +499,36 @@ export default function FormDetail() {
                   className="flex-1 min-w-0 h-11 border-gray-300 bg-white text-xs sm:text-sm font-mono truncate" 
                   aria-label="Shareable form link"
                 />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button 
-                      onClick={copyShareLink} 
-                      variant="outline" 
-                      size="icon" 
-                      className="h-11 w-11 border-gray-300 hover:bg-gray-50 shrink-0 flex-shrink-0"
-                      aria-label="Copy link"
-                    >
-                      {copied ? (
-                        <Check className="w-5 h-5 text-green-600" />
-                      ) : (
-                        <Copy className="w-5 h-5" />
-                      )}
-          </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{copied ? "Link copied!" : "Click to copy link"}</p>
-                  </TooltipContent>
-                </Tooltip>
-        </div>
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                <div className="space-y-0.5">
+                  <Label htmlFor="requires-login" className="text-sm font-medium">
+                    Require Login
+                  </Label>
+                  <p className="text-xs text-gray-500">
+                    {requiresLogin 
+                      ? "Users must log in to view and submit this form"
+                      : "Anyone with the link can view and submit without logging in"}
+                  </p>
+                </div>
+                <Switch
+                  id="requires-login"
+                  checked={requiresLogin}
+                  onCheckedChange={handleRequiresLoginChange}
+                  disabled={isUpdatingRequiresLogin}
+                />
+              </div>
             </CardContent>
           </Card>
 
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Card className="border-0 shadow-md hover:shadow-lg transition-shadow duration-300">
+            <Card className="border border-white/10 shadow-md hover:shadow-lg transition-shadow duration-300 bg-white/95 backdrop-blur">
               <CardContent className="pt-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-4xl font-bold text-gray-900">{form.questions.length}</div>
-                    <p className="text-sm text-gray-600 mt-1">Questions</p>
+                    <div className="text-4xl font-bold text-slate-900">{form.questions.length}</div>
+                    <p className="text-sm text-slate-600 mt-1">Questions</p>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center shrink-0">
                     <FileQuestion className="w-6 h-6 text-blue-600" />
@@ -487,12 +536,12 @@ export default function FormDetail() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="border-0 shadow-md hover:shadow-lg transition-shadow duration-300">
+            <Card className="border border-white/10 shadow-md hover:shadow-lg transition-shadow duration-300 bg-white/95 backdrop-blur">
               <CardContent className="pt-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-4xl font-bold text-gray-900">{form.submission_count || 0}</div>
-                    <p className="text-sm text-gray-600 mt-1">Responses</p>
+                    <div className="text-4xl font-bold text-slate-900">{form.submission_count || 0}</div>
+                    <p className="text-sm text-slate-600 mt-1">Responses</p>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-green-100 flex items-center justify-center shrink-0">
                     <MessageSquare className="w-6 h-6 text-green-600" />
@@ -503,31 +552,31 @@ export default function FormDetail() {
           </div>
 
         {/* Tabs */}
-          <div className="flex gap-4 sm:gap-6 border-b-2 border-gray-200 overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div className="flex gap-4 sm:gap-6 border-b-2 border-white/20 overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
           <button
             onClick={() => setActiveTab("questions")}
               className={`pb-4 px-1 font-semibold text-sm sm:text-base transition-colors relative whitespace-nowrap flex-shrink-0 ${
               activeTab === "questions"
-                  ? "text-primary"
-                : "text-gray-600 hover:text-gray-900"
+                  ? "text-white"
+                : "text-slate-200 hover:text-white/90"
             }`}
               aria-selected={activeTab === "questions"}
               role="tab"
           >
               <span className="flex items-center gap-2">
                 <FileQuestion className="w-4 h-4 shrink-0" />
-            <span className="whitespace-nowrap">Questions ({form.questions.length})</span>
+                <span className="whitespace-nowrap">Questions ({form.questions.length})</span>
               </span>
               {activeTab === "questions" && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></span>
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-white"></span>
               )}
           </button>
           <button
             onClick={() => setActiveTab("responses")}
               className={`pb-4 px-1 font-semibold text-sm sm:text-base transition-colors relative whitespace-nowrap flex-shrink-0 ${
               activeTab === "responses"
-                  ? "text-primary"
-                : "text-gray-600 hover:text-gray-900"
+                  ? "text-white"
+                : "text-slate-200 hover:text-white/90"
             }`}
               aria-selected={activeTab === "responses"}
               role="tab"
@@ -537,7 +586,7 @@ export default function FormDetail() {
                 <span className="whitespace-nowrap">Responses ({form.submission_count || 0})</span>
               </span>
               {activeTab === "responses" && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></span>
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-white"></span>
               )}
           </button>
         </div>

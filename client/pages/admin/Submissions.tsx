@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { FormSubmission } from '@shared/api';
-import { Layout } from '@/components/layout/Layout';
+import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, ClipboardList } from 'lucide-react';
@@ -13,6 +13,8 @@ export default function AdminSubmissions() {
   const [submissions, setSubmissions] = useState<FormSubmission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [sortField, setSortField] = useState<'id' | 'form_title' | 'username' | 'submitted_at'>('id');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   useEffect(() => {
     fetchSubmissions();
@@ -40,6 +42,46 @@ export default function AdminSubmissions() {
     }
   };
 
+  const sortedSubmissions = [...submissions].sort((a, b) => {
+    let aVal: string | number;
+    let bVal: string | number;
+
+    switch (sortField) {
+      case 'form_title':
+        aVal = a.form_title || `Form #${a.form_id}`;
+        bVal = b.form_title || `Form #${b.form_id}`;
+        break;
+      case 'username':
+        aVal = a.username || (a.submitted_by ? `User #${a.submitted_by}` : 'Anonymous');
+        bVal = b.username || (b.submitted_by ? `User #${b.submitted_by}` : 'Anonymous');
+        break;
+      case 'submitted_at':
+        aVal = new Date(a.submitted_at).getTime();
+        bVal = new Date(b.submitted_at).getTime();
+        break;
+      default:
+        aVal = a.id;
+        bVal = b.id;
+    }
+
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      const cmp = aVal.localeCompare(bVal);
+      return sortDirection === 'asc' ? cmp : -cmp;
+    }
+
+    const cmp = (aVal as number) - (bVal as number);
+    return sortDirection === 'asc' ? cmp : -cmp;
+  });
+
+  const handleSort = (field: 'id' | 'form_title' | 'username' | 'submitted_at') => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -49,20 +91,22 @@ export default function AdminSubmissions() {
   }
 
   return (
-    <Layout>
+    <AdminLayout>
       <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="space-y-2">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent flex items-center gap-3">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-slate-50 via-slate-100 to-slate-200 bg-clip-text text-transparent flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center">
               <ClipboardList className="h-7 w-7 text-purple-600" />
             </div>
             View Submissions
           </h1>
-          <p className="text-gray-600 text-lg">View all form submissions</p>
+          <p className="text-slate-200 text-lg">View all form submissions</p>
         </div>
         <Link to="/admin">
-          <Button variant="outline" className="border-gray-300">Back to Dashboard</Button>
+          <Button className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white shadow-md hover:shadow-lg transition-all duration-200">
+            Back to Dashboard
+          </Button>
         </Link>
       </div>
 
@@ -81,10 +125,30 @@ export default function AdminSubmissions() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50/50">
-                <TableHead className="font-semibold">ID</TableHead>
-                <TableHead className="font-semibold">Form Title</TableHead>
-                <TableHead className="font-semibold">Submitted By</TableHead>
-                <TableHead className="font-semibold">Submitted At</TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('id')}
+                >
+                  ID {sortField === 'id' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('form_title')}
+                >
+                  Form Title {sortField === 'form_title' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('username')}
+                >
+                  Submitted By {sortField === 'username' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('submitted_at')}
+                >
+                  Submitted At {sortField === 'submitted_at' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -95,14 +159,15 @@ export default function AdminSubmissions() {
                   </TableCell>
                 </TableRow>
               ) : (
-                submissions.map((submission) => (
+                sortedSubmissions.map((submission) => (
                   <TableRow key={submission.id}>
                     <TableCell>{submission.id}</TableCell>
                     <TableCell className="font-medium">
                       {submission.form_title || `Form #${submission.form_id}`}
                     </TableCell>
                     <TableCell>
-                      {submission.username || (submission.submitted_by ? `User #${submission.submitted_by}` : 'Anonymous')}
+                      {submission.username ||
+                        (submission.submitted_by ? `User #${submission.submitted_by}` : 'Anonymous')}
                     </TableCell>
                     <TableCell>
                       {new Date(submission.submitted_at).toLocaleString()}
@@ -115,7 +180,7 @@ export default function AdminSubmissions() {
         </CardContent>
       </Card>
       </div>
-    </Layout>
+    </AdminLayout>
   );
 }
 

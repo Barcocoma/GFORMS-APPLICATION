@@ -34,10 +34,10 @@ export default function Login() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-blue-800 to-blue-900">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin mx-auto text-gray-600" />
-          <p className="mt-2 text-gray-600">Loading...</p>
+          <Loader2 className="h-8 w-8 animate-spin mx-auto text-white" />
+          <p className="mt-2 text-slate-200">Loading...</p>
         </div>
       </div>
     );
@@ -59,9 +59,9 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-indigo-50 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-blue-800 to-blue-900 px-4">
       <div className="w-full max-w-md">
-        <Card className="border-0 shadow-xl">
+        <Card className="border border-white/20 shadow-2xl bg-white/95 backdrop-blur">
           <CardHeader className="space-y-3 pb-6">
             <div className="flex justify-center mb-4">
               <div className="w-16 h-16 bg-gradient-to-br from-primary to-primary/80 rounded-2xl flex items-center justify-center shadow-lg">
@@ -80,10 +80,10 @@ export default function Login() {
                 </svg>
               </div>
             </div>
-            <CardTitle className="text-3xl font-bold text-center bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+            <CardTitle className="text-3xl font-bold text-center bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">
               Welcome Back
             </CardTitle>
-            <CardDescription className="text-center text-base">
+            <CardDescription className="text-center text-base text-slate-600">
               Enter your credentials to access the system
             </CardDescription>
           </CardHeader>
@@ -107,7 +107,7 @@ export default function Login() {
                   onChange={(e) => setUsername(e.target.value)}
                   required
                   disabled={isLoading}
-                  className="h-11 border-gray-300 focus:border-primary focus:ring-primary"
+                  className="h-11 border-gray-300 bg-white text-slate-900 placeholder:text-gray-400 focus:border-primary focus:ring-primary"
                 />
               </div>
 
@@ -123,7 +123,7 @@ export default function Login() {
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   disabled={isLoading}
-                  className="h-11 border-gray-300 focus:border-primary focus:ring-primary"
+                  className="h-11 border-gray-300 bg-white text-slate-900 placeholder:text-gray-400 focus:border-primary focus:ring-primary"
                 />
               </div>
 

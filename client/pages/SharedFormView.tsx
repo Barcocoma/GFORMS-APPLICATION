@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, CheckCircle2, Star, Heart, ThumbsUp, BarChart3 } from 'lucide-react';
+import { Loader2, CheckCircle2, Star, Heart, ThumbsUp, BarChart3, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
 interface ValidationRules {
@@ -35,6 +35,19 @@ interface FormQuestion {
   description?: string; // Question description/help text
   validation?: ValidationRules; // Validation rules
   conditional_logic?: ConditionalLogic; // Conditional logic rules
+  sectionId?: string | number | null; // Section this question belongs to
+}
+
+interface FormSection {
+  id: string | number;
+  title: string;
+  description?: string;
+  conditionalNavigation?: {
+    questionId?: string;
+    answer?: string | string[];
+    operator?: 'equals' | 'contains' | 'not_equals';
+  };
+  display_order?: number;
 }
 
 interface SharedForm {
@@ -44,7 +57,9 @@ interface SharedForm {
   confirmation_message: string | null;
   accepting_responses: boolean;
   response_limit: number | null;
+  requires_login?: boolean;
   questions: FormQuestion[];
+  sections?: FormSection[];
 }
 
 export default function SharedFormView() {
@@ -73,36 +88,36 @@ export default function SharedFormView() {
       earned_points: number;
     }>;
   } | null>(null);
+  const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0); // Current section being displayed
+  const [sections, setSections] = useState<FormSection[]>([]); // All sections in the form
 
   useEffect(() => {
-    // Redirect to login if not authenticated
-    if (!isAuthenticated && !token) {
-      navigate('/login', { state: { from: `/form/${shareToken}` } });
-      return;
-    }
-    
-    if (shareToken && token) {
+    if (shareToken) {
       fetchForm();
     }
-  }, [shareToken, isAuthenticated, token, navigate]);
+  }, [shareToken]);
 
   const fetchForm = async () => {
     try {
       setIsLoading(true);
-      if (!token) {
-        navigate('/login', { state: { from: `/form/${shareToken}` } });
-        return;
+      
+      // Build headers - include token if available
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
       
       const response = await fetch(`/api/forms/shared/${shareToken}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers
       });
 
       if (!response.ok) {
         if (response.status === 404) {
           setError('Form not found');
+        } else if (response.status === 401) {
+          // Login required but user not authenticated
+          navigate('/login', { state: { from: `/form/${shareToken}` } });
+          return;
         } else {
           throw new Error('Failed to load form');
         }
@@ -111,6 +126,50 @@ export default function SharedFormView() {
 
       const data = await response.json();
       setForm(data);
+      
+      // If form requires login and user is not authenticated, redirect to login
+      // Check explicitly: requires_login must be explicitly false (or 0) to allow public access
+      const requiresLogin = data.requires_login !== undefined ? (data.requires_login === true || data.requires_login === 1) : true;
+      if (requiresLogin && !isAuthenticated && !token) {
+        navigate('/login', { state: { from: `/form/${shareToken}` } });
+        return;
+      }
+      
+      // Load sections if they exist - ALWAYS check for sections array
+      console.log('=== LOADING FORM DATA ===');
+      console.log('Raw data.sections:', data.sections);
+      console.log('data.sections type:', typeof data.sections);
+      console.log('data.sections is array?', Array.isArray(data.sections));
+      console.log('data.sections length:', data.sections?.length);
+      
+      if (data.sections && Array.isArray(data.sections) && data.sections.length > 0) {
+        // Normalize section IDs to strings for consistent matching
+        const normalizedSections = data.sections.map((s: FormSection) => ({
+          ...s,
+          id: String(s.id) // Ensure ID is always a string
+        }));
+        setSections(normalizedSections);
+        
+        // Check if there are questions without section
+        const questionsWithoutSection = (data.questions || []).filter((q: FormQuestion) => !q.sectionId);
+        // If there are questions without section, start with index -1 (first page without section)
+        // Otherwise, start with first section (index 0)
+        setCurrentSectionIndex(questionsWithoutSection.length > 0 ? -1 : 0);
+        
+        // Debug: Log sections and questions
+        console.log('✅ Loaded sections:', normalizedSections);
+        console.log('Questions without section:', questionsWithoutSection.length);
+        console.log('Questions with sectionIds:', data.questions?.map((q: FormQuestion) => ({
+          id: q.id,
+          text: q.question_text?.substring(0, 30),
+          sectionId: q.sectionId,
+          sectionIdType: typeof q.sectionId
+        })));
+      } else {
+        console.log('❌ No sections found - data.sections:', data.sections);
+        setSections([]);
+        setCurrentSectionIndex(0);
+      }
       
       // Initialize otherAnswers from existing answers if any (for edit scenarios)
       // This is mainly for future use if we add edit response feature
@@ -319,21 +378,397 @@ export default function SharedFormView() {
   };
 
   // Get visible questions based on conditional logic
-  const visibleQuestions = form ? form.questions.filter(q => shouldShowQuestion(q)) : [];
+  // Group questions by sections
+  const getQuestionsBySection = () => {
+    if (!form) return { bySection: new Map(), withoutSection: [] };
+    
+    const bySection = new Map<string | number, FormQuestion[]>();
+    const withoutSection: FormQuestion[] = [];
+    
+    form.questions.forEach((q) => {
+      if (shouldShowQuestion(q)) {
+        if (q.sectionId) {
+          // Normalize sectionId to string for consistent key matching
+          const normalizedSectionId = String(q.sectionId);
+          const sectionQuestions = bySection.get(normalizedSectionId) || [];
+          sectionQuestions.push(q);
+          bySection.set(normalizedSectionId, sectionQuestions);
+        } else {
+          withoutSection.push(q);
+        }
+      }
+    });
+    
+    return { bySection, withoutSection };
+  };
+  
+  // Get questions without section
+  const getQuestionsWithoutSection = () => {
+    if (!form) return [];
+    return form.questions.filter(q => shouldShowQuestion(q) && !q.sectionId);
+  };
+
+  // Get questions for current section
+  const getCurrentSectionQuestions = () => {
+    if (!form) return [];
+    
+    const questionsWithoutSection = getQuestionsWithoutSection();
+    const hasQuestionsWithoutSection = questionsWithoutSection.length > 0;
+    
+    console.log('getCurrentSectionQuestions - sections.length:', sections.length);
+    console.log('getCurrentSectionQuestions - currentSectionIndex:', currentSectionIndex);
+    console.log('getCurrentSectionQuestions - hasQuestionsWithoutSection:', hasQuestionsWithoutSection);
+    console.log('getCurrentSectionQuestions - form.questions:', form.questions.map(q => ({
+      id: q.id,
+      text: q.question_text?.substring(0, 30),
+      sectionId: q.sectionId
+    })));
+    
+    // If no sections, show all questions
+    if (sections.length === 0) {
+      console.log('No sections - showing all questions');
+      return form.questions.filter(q => shouldShowQuestion(q));
+    }
+    
+    // If currentSectionIndex is -1, show questions without section
+    if (currentSectionIndex === -1) {
+      console.log('Showing questions without section');
+      return questionsWithoutSection;
+    }
+    
+    // Sections exist - show questions from current section
+    const sectionIndex = hasQuestionsWithoutSection ? currentSectionIndex : currentSectionIndex;
+    const currentSection = sections[sectionIndex];
+    if (!currentSection) {
+      console.log('No current section at index', sectionIndex);
+      return [];
+    }
+    
+    console.log('=== GET CURRENT SECTION QUESTIONS ===');
+    console.log('Current section index:', sectionIndex);
+    console.log('Total sections:', sections.length);
+    console.log('Current section:', { id: currentSection.id, title: currentSection.title });
+    console.log('All sections:', sections.map((s, idx) => ({ index: idx, id: s.id, title: s.title })));
+    
+    // Normalize section ID to string for consistent comparison
+    const currentSectionId = String(currentSection.id);
+    
+    // Filter questions that belong to current section only
+    const sectionQuestions = form.questions.filter(q => {
+      if (!shouldShowQuestion(q)) {
+        console.log(`Question "${q.question_text?.substring(0, 30)}" filtered out by shouldShowQuestion`);
+        return false;
+      }
+      
+      // Exclude questions without section when showing a section
+      if (!q.sectionId) {
+        console.log(`Question "${q.question_text?.substring(0, 30)}" has no sectionId - excluding`);
+        return false;
+      }
+      
+      // Normalize and compare section IDs
+      const qSectionId = String(q.sectionId);
+      const matches = qSectionId === currentSectionId;
+      console.log(`Question "${q.question_text?.substring(0, 30)}" (ID: ${q.id}) sectionId: ${qSectionId}, currentSectionId: ${currentSectionId}, matches: ${matches}`);
+      return matches;
+    });
+    
+    console.log(`Found ${sectionQuestions.length} questions for current section (index ${sectionIndex})`);
+    console.log('Questions in this section:', sectionQuestions.map(q => ({ id: q.id, text: q.question_text?.substring(0, 30) })));
+    return sectionQuestions;
+  };
+  
+  const visibleQuestions = getCurrentSectionQuestions();
+  
+  // Get total number of pages (including questions without section)
+  const getTotalPages = () => {
+    if (sections.length === 0) return 1;
+    const questionsWithoutSection = getQuestionsWithoutSection();
+    return questionsWithoutSection.length > 0 ? sections.length + 1 : sections.length;
+  };
+
+  // Navigation functions
+  const goToNextSection = (e?: React.MouseEvent) => {
+    // CRITICAL: Prevent form submission
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    const questionsWithoutSection = getQuestionsWithoutSection();
+    const hasQuestionsWithoutSection = questionsWithoutSection.length > 0;
+    const totalPages = getTotalPages();
+    const maxIndex = sections.length - 1;
+    
+    // Calculate next index
+    let nextIndex = currentSectionIndex + 1;
+    
+    // If currently on -1 (questions without section), go to 0 (first section)
+    if (currentSectionIndex === -1) {
+      nextIndex = 0;
+    }
+    
+    // Check if we can go to next page
+    if (currentSectionIndex === -1 && hasQuestionsWithoutSection) {
+      // From questions without section, go to first section (index 0)
+      nextIndex = 0;
+    } else if (currentSectionIndex >= 0 && currentSectionIndex < maxIndex) {
+      // Within sections, go to next section
+      nextIndex = currentSectionIndex + 1;
+    } else {
+      // Already on last page
+      console.log('❌ Cannot go to next section: Already on last page');
+      return;
+    }
+    
+    console.log('=== GOING TO NEXT SECTION ===');
+    console.log('Current section:', currentSectionIndex);
+    console.log('Next section:', nextIndex);
+    console.log('Total pages:', totalPages);
+    
+    // Validate current section before allowing navigation
+    const errors: Record<number, string> = {};
+    let hasErrors = false;
+    
+    // Check all required questions in current section
+    for (const question of visibleQuestions) {
+      if (question.is_required) {
+        const answer = answers[question.id];
+        if (!answer || (Array.isArray(answer) && answer.length === 0)) {
+          errors[question.id] = 'This field is required';
+          hasErrors = true;
+        } else if (question.has_other) {
+          // Validate "Other" option
+          if (typeof answer === 'string' && answer === '__OTHER__') {
+            errors[question.id] = 'Please specify your answer';
+            hasErrors = true;
+          } else if (Array.isArray(answer) && answer.some(a => typeof a === 'string' && a.startsWith('__OTHER__') && a === '__OTHER__')) {
+            errors[question.id] = 'Please specify your answer';
+            hasErrors = true;
+          }
+        }
+        
+        // Validate answer against validation rules
+        const validationError = validateAnswer(question, answer);
+        if (validationError) {
+          errors[question.id] = validationError;
+          hasErrors = true;
+        }
+      }
+    }
+    
+    if (hasErrors) {
+      setValidationErrors(errors);
+      toast({
+        title: "Please complete this section",
+        description: "Answer all required questions before proceeding to the next section.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    // Clear validation errors for current section
+    const currentSectionQuestionIds = visibleQuestions.map(q => q.id);
+    setValidationErrors(prev => {
+      const updated = { ...prev };
+      currentSectionQuestionIds.forEach(id => {
+        delete updated[id];
+      });
+      return updated;
+    });
+    
+    console.log('✅ Navigating to next section');
+    setCurrentSectionIndex(nextIndex);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  
+  const goToPreviousSection = () => {
+    if (currentSectionIndex === -1) {
+      // Already on first page (questions without section)
+      return;
+    }
+    
+    if (currentSectionIndex === 0) {
+      // On first section, check if we should go back to questions without section
+      const questionsWithoutSection = getQuestionsWithoutSection();
+      if (questionsWithoutSection.length > 0) {
+        setCurrentSectionIndex(-1);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+    }
+    
+    if (currentSectionIndex > 0) {
+      setCurrentSectionIndex(currentSectionIndex - 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+  
+  // Check if current section is complete (all required questions answered)
+  const isCurrentSectionComplete = () => {
+    if (sections.length === 0) return true;
+    
+    for (const question of visibleQuestions) {
+      if (question.is_required) {
+        const answer = answers[question.id];
+        if (!answer || (Array.isArray(answer) && answer.length === 0)) {
+          return false;
+        }
+        // Check "Other" option
+        if (question.has_other) {
+          if (typeof answer === 'string' && answer === '__OTHER__') {
+            return false;
+          }
+          if (Array.isArray(answer) && answer.some(a => typeof a === 'string' && a.startsWith('__OTHER__') && a === '__OTHER__')) {
+            return false;
+          }
+        }
+        // Validate answer
+        const validationError = validateAnswer(question, answer);
+        if (validationError) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  
+  // Check if ALL questions from ALL sections are answered (for submit button)
+  const areAllQuestionsAnswered = () => {
+    if (!form) {
+      console.log('areAllQuestionsAnswered: No form');
+      return false;
+    }
+    
+    const allQuestionsToCheck = form.questions.filter(q => shouldShowQuestion(q));
+    console.log('areAllQuestionsAnswered: Checking', allQuestionsToCheck.length, 'questions');
+    
+    const unansweredRequired: string[] = [];
+    
+    for (const question of allQuestionsToCheck) {
+      if (question.is_required) {
+        const answer = answers[question.id];
+        if (!answer || (Array.isArray(answer) && answer.length === 0)) {
+          unansweredRequired.push(`Q${question.id}: ${question.question_text?.substring(0, 30)}`);
+          console.log(`  ❌ Required question "${question.question_text?.substring(0, 30)}" (ID: ${question.id}) not answered. Answer:`, answer);
+          continue;
+        }
+        // Check "Other" option
+        if (question.has_other) {
+          if (typeof answer === 'string' && answer === '__OTHER__') {
+            unansweredRequired.push(`Q${question.id}: ${question.question_text?.substring(0, 30)} (Other not specified)`);
+            console.log(`  ❌ Required question "${question.question_text?.substring(0, 30)}" has "Other" selected but no text provided`);
+            continue;
+          }
+          if (Array.isArray(answer) && answer.some(a => typeof a === 'string' && a.startsWith('__OTHER__') && a === '__OTHER__')) {
+            unansweredRequired.push(`Q${question.id}: ${question.question_text?.substring(0, 30)} (Other not specified)`);
+            console.log(`  ❌ Required question "${question.question_text?.substring(0, 30)}" has "Other" selected but no text provided`);
+            continue;
+          }
+        }
+        // Validate answer
+        const validationError = validateAnswer(question, answer);
+        if (validationError) {
+          unansweredRequired.push(`Q${question.id}: ${question.question_text?.substring(0, 30)} (${validationError})`);
+          console.log(`  ❌ Required question "${question.question_text?.substring(0, 30)}" has validation error:`, validationError);
+          continue;
+        }
+        console.log(`  ✅ Required question "${question.question_text?.substring(0, 30)}" answered`);
+      }
+    }
+    
+    if (unansweredRequired.length > 0) {
+      console.log('areAllQuestionsAnswered: FALSE - Unanswered required questions:', unansweredRequired);
+      return false;
+    }
+    
+    console.log('areAllQuestionsAnswered: TRUE - All required questions answered');
+    return true;
+  };
+  
+  // CRITICAL: Only show "Next" button if NOT on last section
+  // Only show "Submit" button if ON last section
+  // Calculate navigation state
+  const questionsWithoutSection = getQuestionsWithoutSection();
+  const hasQuestionsWithoutSection = questionsWithoutSection.length > 0;
+  const totalPages = getTotalPages();
+  
+  // isLastSection: true if we're on the last page (last section index)
+  const isLastSection = sections.length > 0 && (
+    (hasQuestionsWithoutSection && currentSectionIndex === sections.length - 1) ||
+    (!hasQuestionsWithoutSection && currentSectionIndex === sections.length - 1)
+  );
+  
+  // canGoNext: true if there's a next page and current page is complete
+  const canGoNext = (() => {
+    if (sections.length === 0) return false; // No sections, single page
+    if (!isCurrentSectionComplete()) return false; // Current page not complete
+    
+    if (currentSectionIndex === -1) {
+      // On questions without section, can go to first section (index 0)
+      return hasQuestionsWithoutSection && sections.length > 0;
+    }
+    
+    // On a section, can go to next section if not last
+    return currentSectionIndex < sections.length - 1;
+  })();
+  
+  // canGoPrevious: true if there's a previous page
+  const canGoPrevious = (() => {
+    if (currentSectionIndex === -1) return false; // Already on first page
+    if (currentSectionIndex === 0) {
+      // On first section, can go back to questions without section if they exist
+      return hasQuestionsWithoutSection;
+    }
+    return true; // Can go to previous section
+  })();
+  
+  // Debug: Log navigation state
+  console.log('=== NAVIGATION STATE ===');
+  console.log('sections.length:', sections.length);
+  console.log('sections:', sections.map(s => ({ id: s.id, title: s.title })));
+  console.log('currentSectionIndex:', currentSectionIndex);
+  console.log('isLastSection:', isLastSection);
+  console.log('canGoNext:', canGoNext);
+  console.log('canGoPrevious:', canGoPrevious);
+  console.log('visibleQuestions.length:', visibleQuestions.length);
+  console.log('isCurrentSectionComplete:', isCurrentSectionComplete());
+  console.log('areAllQuestionsAnswered:', areAllQuestionsAnswered());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
 
     if (!form) return;
+
+    // CRITICAL: Only allow submission if we're on the last section
+    if (sections.length > 0 && !isLastSection) {
+      console.log('❌ Form submission blocked: Not on last section. Current:', currentSectionIndex, 'Last:', sections.length - 1);
+      toast({
+        title: "Cannot Submit",
+        description: "Please complete all sections before submitting.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     // Clear previous validation errors
     setValidationErrors({});
 
-    // Validate all visible questions only
+    // CRITICAL: Validate ALL questions from ALL sections, not just visible ones
+    // Get all questions that should be shown (considering conditional logic)
+    const allQuestionsToValidate = form.questions.filter(q => shouldShowQuestion(q));
+    
+    console.log('=== SUBMITTING FORM ===');
+    console.log('Total questions to validate:', allQuestionsToValidate.length);
+    console.log('Current visibleQuestions:', visibleQuestions.length);
+    console.log('Answers provided:', Object.keys(answers).length);
+    
     const errors: Record<number, string> = {};
     let hasErrors = false;
 
-    for (const question of visibleQuestions) {
+    // Validate ALL questions from ALL sections
+    for (const question of allQuestionsToValidate) {
       const answer = answers[question.id];
       
       // Check required fields
@@ -341,6 +776,7 @@ export default function SharedFormView() {
         if (!answer || (Array.isArray(answer) && answer.length === 0)) {
           errors[question.id] = 'This field is required';
           hasErrors = true;
+          console.log(`  ❌ Question "${question.question_text?.substring(0, 30)}" is required but not answered`);
           continue;
         }
         // Validate "Other" option - if "Other" is selected, text must be provided
@@ -365,12 +801,37 @@ export default function SharedFormView() {
         hasErrors = true;
       }
     }
+    
+    console.log(`Validation complete: ${hasErrors ? 'HAS ERRORS' : 'NO ERRORS'}, errors:`, errors);
 
     if (hasErrors) {
       setValidationErrors(errors);
+      
+      // If errors are in a different section, navigate to that section
+      const errorQuestionIds = Object.keys(errors).map(id => parseInt(id));
+      if (sections.length > 0) {
+        // Find which section contains the first error
+        for (const errorQuestionId of errorQuestionIds) {
+          const errorQuestion = form.questions.find(q => q.id === errorQuestionId);
+          if (errorQuestion && errorQuestion.sectionId) {
+            const errorSectionIndex = sections.findIndex(s => String(s.id) === String(errorQuestion.sectionId));
+            if (errorSectionIndex !== -1 && errorSectionIndex !== currentSectionIndex) {
+              setCurrentSectionIndex(errorSectionIndex);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+              toast({
+                title: "Validation Error",
+                description: `Please answer all required questions. Navigated to section ${errorSectionIndex + 1}.`,
+                variant: "destructive",
+              });
+              return;
+            }
+          }
+        }
+      }
+      
       toast({
         title: "Validation Error",
-        description: "Please fix the errors before submitting",
+        description: "Please answer all required questions before submitting",
         variant: "destructive",
       });
       return;
@@ -379,26 +840,30 @@ export default function SharedFormView() {
     setIsSubmitting(true);
 
     try {
-      if (!token) {
-        toast({
-          title: "Error",
-          description: "Please log in to submit the form",
-          variant: "destructive",
-        });
-        navigate('/login', { state: { from: `/form/${shareToken}` } });
-        return;
+      // Build headers - include token if available and form requires login
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      if (form?.requires_login !== false && token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
 
       const response = await fetch(`/api/forms/shared/${shareToken}/submit`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({ answers }),
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          toast({
+            title: "Error",
+            description: "Please log in to submit the form",
+            variant: "destructive",
+          });
+          navigate('/login', { state: { from: `/form/${shareToken}` } });
+          return;
+        }
         throw new Error('Failed to submit form');
       }
 
@@ -685,6 +1150,44 @@ export default function SharedFormView() {
           </CardHeader>
           <CardContent className="pt-8">
             <form onSubmit={handleSubmit} className="space-y-8">
+              {/* Section Header - Google Forms Style */}
+              {/* Only show section header if we're on a section (not on questions without section) */}
+              {sections.length > 0 && currentSectionIndex >= 0 && sections[currentSectionIndex] && (
+                <>
+                  {/* Orange Banner */}
+                  <div className="bg-orange-500 text-white px-4 py-2 rounded-t-lg font-medium text-sm mb-0">
+                    Section {currentSectionIndex + 1} of {sections.length}
+                  </div>
+                  
+                  {/* Section Content Box */}
+                  <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-b-lg border-2 border-t-0 border-orange-200 p-6 mb-6 shadow-sm">
+                    <div className="text-center space-y-2">
+                      <h2 className="text-2xl font-semibold text-gray-900">
+                        {sections[currentSectionIndex].title}
+                      </h2>
+                      {sections[currentSectionIndex].description && (
+                        <p className="text-sm text-gray-600">
+                          {sections[currentSectionIndex].description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {/* Show message if section has no questions */}
+              {sections.length > 0 && visibleQuestions.length === 0 && (
+                <div className="text-center py-8 text-gray-500 border-2 border-dashed border-gray-300 rounded-lg p-6">
+                  <p className="font-semibold text-lg mb-2">This section has no questions yet.</p>
+                  <p className="text-sm">Section: {sections[currentSectionIndex]?.title || `Section ${currentSectionIndex + 1}`}</p>
+                  <p className="text-xs mt-2 text-gray-400">
+                    Debug: Section ID: {sections[currentSectionIndex]?.id}, 
+                    Total questions in form: {form?.questions.length || 0},
+                    Questions with this sectionId: {form?.questions.filter(q => String(q.sectionId) === String(sections[currentSectionIndex]?.id)).length || 0}
+                  </p>
+                </div>
+              )}
+              
               {visibleQuestions.map((question, index) => {
                 const totalQuestions = visibleQuestions.length;
                 const currentQuestion = index + 1;
@@ -1003,22 +1506,111 @@ export default function SharedFormView() {
               );
               })}
 
-              <div className="flex gap-4 pt-6">
-                <Button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 h-12 text-base font-semibold bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary shadow-md hover:shadow-lg transition-all duration-200"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                      Submitting...
-                    </>
+              {/* Navigation Buttons - Only show if sections exist */}
+              {sections.length > 0 ? (
+                <div className="flex justify-between items-center pt-6 border-t border-gray-200">
+                  {canGoPrevious ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={goToPreviousSection}
+                      className="gap-2"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Previous
+                    </Button>
                   ) : (
-                    'Submit Response'
+                    <div></div>
                   )}
-                </Button>
-              </div>
+                  
+                  {canGoNext ? (
+                    <Button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        goToNextSection(e);
+                      }}
+                      className="bg-primary hover:bg-primary/90 text-white gap-2"
+                    >
+                      Next
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  ) : isLastSection ? (
+                    // Only show Submit button if we're on the last section
+                    <Button
+                      type="submit"
+                      disabled={isSubmitting || !areAllQuestionsAnswered()}
+                      onClick={(e) => {
+                        if (!areAllQuestionsAnswered()) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log('Submit button clicked but not all questions answered');
+                          toast({
+                            title: "Cannot Submit",
+                            description: "Please answer all required questions before submitting.",
+                            variant: "destructive",
+                          });
+                          return false;
+                        }
+                      }}
+                      className="bg-primary hover:bg-primary/90 text-white px-8 py-6 text-lg font-semibold shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={!areAllQuestionsAnswered() ? "Please answer all required questions before submitting" : ""}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                          Submitting...
+                        </>
+                      ) : (
+                        'Submit Response'
+                      )}
+                    </Button>
+                  ) : (
+                    // If not last section and can't go next (section incomplete), show disabled Next button
+                    <Button
+                      type="button"
+                      disabled={true}
+                      className="bg-gray-300 text-gray-500 cursor-not-allowed gap-2"
+                      title="Please complete this section before proceeding"
+                    >
+                      Next
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex justify-center pt-6 border-t border-gray-200">
+                  <Button
+                    type="submit"
+                    disabled={isSubmitting || !areAllQuestionsAnswered()}
+                    onClick={(e) => {
+                      if (!areAllQuestionsAnswered()) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('Submit button clicked but not all questions answered');
+                        toast({
+                          title: "Cannot Submit",
+                          description: "Please answer all required questions before submitting.",
+                          variant: "destructive",
+                        });
+                        return false;
+                      }
+                    }}
+                    className="bg-primary hover:bg-primary/90 text-white px-8 py-6 text-lg font-semibold shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={!areAllQuestionsAnswered() ? "Please answer all required questions before submitting" : ""}
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      'Submit Response'
+                    )}
+                  </Button>
+                </div>
+              )}
             </form>
           </CardContent>
         </Card>

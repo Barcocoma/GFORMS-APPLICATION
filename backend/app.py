@@ -9,9 +9,18 @@ import secrets
 import json
 import csv
 import io
+import threading
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from dotenv import load_dotenv
+from queue import Queue
+from email_utils import (
+    send_email,
+    format_submission_email_html,
+    format_confirmation_email_html,
+    extract_email_from_answers,
+    is_email_configured
+)
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +33,10 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-in-pr
 JWT_SECRET = app.config['SECRET_KEY']
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRATION = timedelta(hours=24)
+
+# Real-time notifications: Store SSE connections per user
+notification_queues = {}
+notification_lock = threading.Lock()
 
 # Database configuration
 DB_CONFIG = {
@@ -146,6 +159,69 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def api_key_required(f):
+    """Decorator to require API key authentication"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        api_key = request.headers.get('api-key') or request.headers.get('API-Key') or request.headers.get('X-API-Key')
+        
+        if not api_key:
+            return jsonify({'error': 'API key is required'}), 401
+        
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Check if api_keys table exists
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'api_keys'
+        """)
+        api_keys_table_exists = cursor.fetchone() is not None
+        
+        if not api_keys_table_exists:
+            cursor.close()
+            connection.close()
+            return jsonify({'error': 'API key authentication not configured'}), 500
+        
+        # Validate API key
+        cursor.execute("""
+            SELECT id, user_id, name, is_active
+            FROM api_keys
+            WHERE api_key = %s AND is_active = TRUE
+        """, (api_key,))
+        api_key_record = cursor.fetchone()
+        
+        if not api_key_record:
+            cursor.close()
+            connection.close()
+            return jsonify({'error': 'Invalid or inactive API key'}), 401
+        
+        # Update last_used_at
+        try:
+            cursor.execute("""
+                UPDATE api_keys
+                SET last_used_at = NOW()
+                WHERE id = %s
+            """, (api_key_record['id'],))
+            connection.commit()
+        except:
+            pass  # Non-critical, continue even if update fails
+        
+        cursor.close()
+        connection.close()
+        
+        # Store API key info in request for use in endpoint
+        request.api_key_user_id = api_key_record.get('user_id')
+        request.api_key_name = api_key_record.get('name')
+        
+        return f(*args, **kwargs)
+    return decorated
+
 @app.route('/api/ping', methods=['GET'])
 def ping():
     """Health check endpoint"""
@@ -219,6 +295,71 @@ def verify():
 def logout():
     """Logout endpoint (client-side token removal)"""
     return jsonify({'message': 'Logged out successfully'}), 200
+
+@app.route('/api/user/profile', methods=['PUT'])
+@token_required
+def update_profile():
+    """Update current user's profile (username)"""
+    try:
+        user_id = request.current_user['user_id']
+        data = request.get_json()
+        new_username = data.get('username')
+        
+        if not new_username or not new_username.strip():
+            return jsonify({'error': 'Username is required'}), 400
+        
+        new_username = new_username.strip()
+        
+        # Check if username already exists (excluding current user)
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Check if username is already taken by another user
+        cursor.execute(
+            "SELECT id FROM users WHERE username = %s AND id != %s",
+            (new_username, user_id)
+        )
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            cursor.close()
+            connection.close()
+            return jsonify({'error': 'Username already taken'}), 400
+        
+        # Update username
+        cursor.execute(
+            "UPDATE users SET username = %s WHERE id = %s",
+            (new_username, user_id)
+        )
+        connection.commit()
+        
+        # Get updated user info
+        cursor.execute(
+            "SELECT id, username, role FROM users WHERE id = %s",
+            (user_id,)
+        )
+        updated_user = cursor.fetchone()
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({
+            'user': {
+                'id': updated_user['id'],
+                'username': updated_user['username'],
+                'role': updated_user['role']
+            },
+            'message': 'Profile updated successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"Update profile error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Internal server error'}), 500
 
 # Admin endpoints
 @app.route('/api/admin/stats', methods=['GET'])
@@ -416,6 +557,10 @@ def create_form():
         accepting_responses = data.get('accepting_responses', True)
         response_limit = data.get('response_limit')
         is_quiz = data.get('is_quiz', False)
+        email_notifications_enabled = data.get('email_notifications_enabled', False)
+        email_notification_recipients = data.get('email_notification_recipients', '').strip() or None
+        send_confirmation_email = data.get('send_confirmation_email', False)
+        requires_login = data.get('requires_login', True)  # Default to True for backward compatibility
         if response_limit is not None:
             try:
                 response_limit = int(response_limit) if response_limit > 0 else None
@@ -424,6 +569,7 @@ def create_form():
         else:
             response_limit = None
         questions = data.get('questions', [])
+        sections = data.get('sections', [])
         
         if not title:
             return jsonify({'error': 'Form title is required'}), 400
@@ -434,17 +580,88 @@ def create_form():
         
         cursor = connection.cursor(dictionary=True)
         
+        # Check if sections table exists
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_sections'
+        """)
+        sections_table_exists = cursor.fetchone() is not None
+        
+        # Check if section_id column exists in form_questions
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_questions' 
+            AND COLUMN_NAME = 'section_id'
+        """)
+        section_id_column_exists = cursor.fetchone() is not None
+        
         # Generate unique share token
         share_token = secrets.token_urlsafe(32)
         
         # Insert form (with default settings)
-        # Note: Only insert columns that exist in the database schema
+        # Check if email columns exist before inserting
         cursor.execute("""
-            INSERT INTO forms (user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (user_id, title, description, confirmation_message, accepting_responses, response_limit, False, share_token, is_quiz))
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'email_notifications_enabled'
+        """)
+        email_columns_exist = cursor.fetchone() is not None
+        
+        # Check if requires_login column exists
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'requires_login'
+        """)
+        requires_login_column_exists = cursor.fetchone() is not None
+        
+        if email_columns_exist and requires_login_column_exists:
+            cursor.execute("""
+                INSERT INTO forms (user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz, email_notifications_enabled, email_notification_recipients, send_confirmation_email, requires_login)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, title, description, confirmation_message, accepting_responses, response_limit, False, share_token, is_quiz, email_notifications_enabled, email_notification_recipients, send_confirmation_email, requires_login))
+        elif email_columns_exist:
+            cursor.execute("""
+                INSERT INTO forms (user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz, email_notifications_enabled, email_notification_recipients, send_confirmation_email)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, title, description, confirmation_message, accepting_responses, response_limit, False, share_token, is_quiz, email_notifications_enabled, email_notification_recipients, send_confirmation_email))
+        else:
+            cursor.execute("""
+                INSERT INTO forms (user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, title, description, confirmation_message, accepting_responses, response_limit, False, share_token, is_quiz))
         
         form_id = cursor.lastrowid
+        
+        # Map frontend section IDs to database section IDs
+        section_id_map = {}  # {frontend_id: database_id}
+        
+        # Insert sections if table exists
+        if sections_table_exists and sections:
+            for index, section in enumerate(sections):
+                section_title = section.get('title', 'Untitled Section')
+                section_description = section.get('description', '') or None
+                conditional_navigation = section.get('conditionalNavigation')
+                conditional_nav_json = json.dumps(conditional_navigation) if conditional_navigation else None
+                
+                cursor.execute("""
+                    INSERT INTO form_sections (form_id, section_title, section_description, display_order, conditional_navigation)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (form_id, section_title, section_description, index, conditional_nav_json))
+                
+                section_db_id = cursor.lastrowid
+                # Map frontend ID (string) to database ID (int)
+                frontend_id = section.get('id')
+                if frontend_id:
+                    section_id_map[str(frontend_id)] = section_db_id
         
         # Map frontend question types to database types
         type_mapping = {
@@ -499,10 +716,21 @@ def create_form():
             # Convert options to JSON
             options_json = json.dumps(options_data) if options_data else None
             
-            cursor.execute("""
-                INSERT INTO form_questions (form_id, question_text, question_type, options, is_required, display_order)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (form_id, question_text, db_type, options_json, is_required, index))
+            # Get section_id if provided
+            question_section_id = question.get('sectionId')
+            db_section_id = section_id_map.get(str(question_section_id)) if question_section_id and section_id_column_exists else None
+            
+            # Build INSERT query based on whether section_id column exists
+            if section_id_column_exists:
+                cursor.execute("""
+                    INSERT INTO form_questions (form_id, section_id, question_text, question_type, options, is_required, display_order)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (form_id, db_section_id, question_text, db_type, options_json, is_required, index))
+            else:
+                cursor.execute("""
+                    INSERT INTO form_questions (form_id, question_text, question_type, options, is_required, display_order)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (form_id, question_text, db_type, options_json, is_required, index))
         
         connection.commit()
         
@@ -618,13 +846,47 @@ def get_form_by_id(form_id):
             connection.close()
             return jsonify({'error': 'Access denied'}), 403
 
-        # Get form (only columns that exist in schema)
+        # Get form (check if email columns exist)
         cursor.execute("""
-            SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz,
-                   created_at, updated_at, last_opened_at
-            FROM forms
-            WHERE id = %s
-        """, (form_id,))
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'email_notifications_enabled'
+        """)
+        email_columns_exist = cursor.fetchone() is not None
+        
+        # Check if requires_login column exists
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'requires_login'
+        """)
+        requires_login_column_exists = cursor.fetchone() is not None
+        
+        if email_columns_exist and requires_login_column_exists:
+            cursor.execute("""
+                SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz,
+                       email_notifications_enabled, email_notification_recipients, send_confirmation_email, requires_login, created_at, updated_at, last_opened_at
+                FROM forms
+                WHERE id = %s
+            """, (form_id,))
+        elif email_columns_exist:
+            cursor.execute("""
+                SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz,
+                       email_notifications_enabled, email_notification_recipients, send_confirmation_email, created_at, updated_at, last_opened_at
+                FROM forms
+                WHERE id = %s
+            """, (form_id,))
+        else:
+            cursor.execute("""
+                SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, is_quiz,
+                       created_at, updated_at, last_opened_at
+                FROM forms
+                WHERE id = %s
+            """, (form_id,))
         form = cursor.fetchone()
         
         # Update last_opened_at timestamp when form is viewed by owner
@@ -640,13 +902,71 @@ def get_form_by_id(form_id):
             print(f"Warning: Could not update last_opened_at: {e}")
             pass
         
-        # Get form questions
+        # Check if sections table exists
         cursor.execute("""
-            SELECT id, question_text, question_type, options, is_required, display_order
-            FROM form_questions
-            WHERE form_id = %s
-            ORDER BY display_order ASC
-        """, (form_id,))
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_sections'
+        """)
+        sections_table_exists = cursor.fetchone() is not None
+        
+        # Check if section_id column exists in form_questions
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_questions' 
+            AND COLUMN_NAME = 'section_id'
+        """)
+        section_id_column_exists = cursor.fetchone() is not None
+        
+        # Get form sections if table exists
+        sections = []
+        section_id_map = {}  # {database_id: frontend_section_object}
+        if sections_table_exists:
+            cursor.execute("""
+                SELECT id, section_title, section_description, display_order, conditional_navigation
+                FROM form_sections
+                WHERE form_id = %s
+                ORDER BY display_order ASC
+            """, (form_id,))
+            db_sections = cursor.fetchall()
+            print(f"Loading form {form_id}: Found {len(db_sections)} sections in database")
+            
+            for section in db_sections:
+                conditional_nav = None
+                if section['conditional_navigation']:
+                    try:
+                        conditional_nav = json.loads(section['conditional_navigation'])
+                    except:
+                        pass
+                
+                section_obj = {
+                    'id': str(section['id']),  # Convert to string for frontend
+                    'title': section['section_title'],
+                    'description': section.get('section_description'),
+                    'display_order': section.get('display_order', 0),
+                    'conditionalNavigation': conditional_nav
+                }
+                sections.append(section_obj)
+                section_id_map[section['id']] = section_obj
+        
+        # Get form questions
+        if section_id_column_exists:
+            cursor.execute("""
+                SELECT id, section_id, question_text, question_type, options, is_required, display_order
+                FROM form_questions
+                WHERE form_id = %s
+                ORDER BY display_order ASC
+            """, (form_id,))
+        else:
+            cursor.execute("""
+                SELECT id, question_text, question_type, options, is_required, display_order
+                FROM form_questions
+                WHERE form_id = %s
+                ORDER BY display_order ASC
+            """, (form_id,))
         questions = cursor.fetchall()
         
         # Get submission count
@@ -692,11 +1012,49 @@ def get_form_by_id(form_id):
                 question['points'] = points
             if conditional_logic:
                 question['conditional_logic'] = conditional_logic
+            
+            # Map section_id from database ID to frontend section object if applicable
+            if section_id_column_exists and question.get('section_id'):
+                db_section_id = question['section_id']
+                # Find the section object with matching id
+                section_obj = None
+                for section in sections:
+                    # Compare with database ID converted to string
+                    if str(db_section_id) == str(section.get('id')):
+                        section_obj = section
+                        break
+                if section_obj:
+                    question['sectionId'] = section_obj['id']
+                    print(f"  ✅ Question '{question.get('question_text', '')[:30]}' mapped to section '{section_obj.get('title', '')}' (ID: {section_obj.get('id')})")
+                else:
+                    question['sectionId'] = None
+                    print(f"  ⚠️ Question '{question.get('question_text', '')[:30]}' has section_id={db_section_id} but no matching section found. Available sections: {[s.get('id') for s in sections]}")
+            else:
+                question['sectionId'] = None
+                if section_id_column_exists:
+                    print(f"  ⚠️ Question '{question.get('question_text', '')[:30]}' has no section_id")
+        
+        # Debug: Log questions with their sectionIds
+        print(f"Get shared form: Total questions loaded: {len(questions)}")
+        for q in questions:
+            print(f"  Question '{q.get('question_text', '')[:30]}' (ID: {q.get('id')}) -> sectionId: {q.get('sectionId')}")
+        
+        # Debug: Group questions by section
+        questions_by_section = {}
+        for q in questions:
+            section_id = q.get('sectionId') or 'NO_SECTION'
+            if section_id not in questions_by_section:
+                questions_by_section[section_id] = []
+            questions_by_section[section_id].append(q.get('question_text', '')[:30])
+        
+        print(f"Get shared form: Questions grouped by section:")
+        for section_id, q_list in questions_by_section.items():
+            print(f"  Section {section_id}: {len(q_list)} questions - {q_list}")
         
         cursor.close()
         connection.close()
         
-        return jsonify({
+        response_data = {
             'id': form['id'],
             'user_id': form['user_id'],
             'title': form['title'],
@@ -707,8 +1065,21 @@ def get_form_by_id(form_id):
             'questions': questions,
             'submission_count': submission_count,
             'created_at': form['created_at'].isoformat() if form['created_at'] else None,
-            'updated_at': form['updated_at'].isoformat() if form['updated_at'] else None
-        }), 200
+            'updated_at': form['updated_at'].isoformat() if form['updated_at'] else None,
+            'sections': sections if sections_table_exists else []  # Always include sections array
+        }
+        
+        # Add email settings if columns exist
+        if email_columns_exist:
+            response_data['email_notifications_enabled'] = form.get('email_notifications_enabled', False)
+            response_data['email_notification_recipients'] = form.get('email_notification_recipients')
+            response_data['send_confirmation_email'] = form.get('send_confirmation_email', False)
+        
+        # Add requires_login if column exists (convert MySQL 0/1 to boolean)
+        if requires_login_column_exists:
+            response_data['requires_login'] = bool(form.get('requires_login', 1))
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         print(f"Get form by ID error: {e}")
@@ -748,11 +1119,20 @@ def update_form(form_id):
         
         share_token = form['share_token']
         
-        # Get confirmation_message, accepting_responses, response_limit, and is_quiz from request
+        # Get confirmation_message, accepting_responses, response_limit, is_quiz, and email settings from request
         confirmation_message = data.get('confirmation_message', '').strip() or None
         accepting_responses = data.get('accepting_responses', True)
         response_limit = data.get('response_limit')
         is_quiz = data.get('is_quiz', False)
+        email_notifications_enabled = data.get('email_notifications_enabled', False)
+        email_notification_recipients = data.get('email_notification_recipients', '').strip() or None
+        send_confirmation_email = data.get('send_confirmation_email', False)
+        requires_login = data.get('requires_login', True)  # Default to True for backward compatibility
+        sections = data.get('sections', [])
+        # Ensure sections is always a list (handle None/undefined)
+        if sections is None:
+            sections = []
+        print(f"Update form {form_id}: Received sections data: {sections}")
         if response_limit is not None:
             try:
                 response_limit = int(response_limit) if response_limit > 0 else None
@@ -761,12 +1141,104 @@ def update_form(form_id):
         else:
             response_limit = None
         
-        # Update form
+        # Check if sections table exists
         cursor.execute("""
-            UPDATE forms 
-            SET title = %s, description = %s, confirmation_message = %s, accepting_responses = %s, response_limit = %s, is_quiz = %s, updated_at = NOW()
-            WHERE id = %s
-        """, (title, description, confirmation_message, accepting_responses, response_limit, is_quiz, form_id))
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_sections'
+        """)
+        sections_table_exists = cursor.fetchone() is not None
+        
+        # Check if section_id column exists in form_questions
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_questions' 
+            AND COLUMN_NAME = 'section_id'
+        """)
+        section_id_column_exists = cursor.fetchone() is not None
+        
+        # Check if email columns exist
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'email_notifications_enabled'
+        """)
+        email_columns_exist = cursor.fetchone() is not None
+        
+        # Check if requires_login column exists
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'requires_login'
+        """)
+        requires_login_column_exists = cursor.fetchone() is not None
+        
+        # Update form
+        if email_columns_exist and requires_login_column_exists:
+            cursor.execute("""
+                UPDATE forms 
+                SET title = %s, description = %s, confirmation_message = %s, accepting_responses = %s, response_limit = %s, is_quiz = %s, 
+                    email_notifications_enabled = %s, email_notification_recipients = %s, send_confirmation_email = %s, requires_login = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (title, description, confirmation_message, accepting_responses, response_limit, is_quiz, email_notifications_enabled, email_notification_recipients, send_confirmation_email, requires_login, form_id))
+        elif email_columns_exist:
+            cursor.execute("""
+                UPDATE forms 
+                SET title = %s, description = %s, confirmation_message = %s, accepting_responses = %s, response_limit = %s, is_quiz = %s, 
+                    email_notifications_enabled = %s, email_notification_recipients = %s, send_confirmation_email = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (title, description, confirmation_message, accepting_responses, response_limit, is_quiz, email_notifications_enabled, email_notification_recipients, send_confirmation_email, form_id))
+        else:
+            cursor.execute("""
+                UPDATE forms 
+                SET title = %s, description = %s, confirmation_message = %s, accepting_responses = %s, response_limit = %s, is_quiz = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (title, description, confirmation_message, accepting_responses, response_limit, is_quiz, form_id))
+        
+        # Delete existing sections if table exists
+        if sections_table_exists:
+            cursor.execute("DELETE FROM form_sections WHERE form_id = %s", (form_id,))
+        
+        # Map frontend section IDs to database section IDs
+        section_id_map = {}  # {frontend_id: database_id}
+        
+        # Insert/update sections if table exists
+        # Check if sections is not None and not empty
+        print(f"Update form {form_id}: sections_table_exists={sections_table_exists}, sections={sections}, type={type(sections)}, len={len(sections) if sections else 0}")
+        if sections_table_exists and sections is not None and len(sections) > 0:
+            print(f"Updating form {form_id}: Saving {len(sections)} sections")
+            for index, section in enumerate(sections):
+                section_title = section.get('title', 'Untitled Section')
+                section_description = section.get('description', '') or None
+                conditional_navigation = section.get('conditionalNavigation')
+                conditional_nav_json = json.dumps(conditional_navigation) if conditional_navigation else None
+                
+                frontend_id = section.get('id')
+                print(f"  Section {index}: frontend_id={frontend_id}, title='{section_title}'")
+                
+                cursor.execute("""
+                    INSERT INTO form_sections (form_id, section_title, section_description, display_order, conditional_navigation)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (form_id, section_title, section_description, index, conditional_nav_json))
+                
+                section_db_id = cursor.lastrowid
+                print(f"    -> Saved with database ID: {section_db_id}")
+                # Map frontend ID (string) to database ID (int)
+                if frontend_id:
+                    section_id_map[str(frontend_id)] = section_db_id
+                    print(f"    -> Mapped frontend_id '{frontend_id}' -> database_id {section_db_id}")
+        else:
+            if not sections_table_exists:
+                print(f"Updating form {form_id}: sections table does not exist")
+            elif not sections:
+                print(f"Updating form {form_id}: sections array is empty or None")
         
         # Delete existing questions
         cursor.execute("DELETE FROM form_questions WHERE form_id = %s", (form_id,))
@@ -823,12 +1295,29 @@ def update_form(form_id):
             # Convert options to JSON
             options_json = json.dumps(options_data) if options_data else None
             
-            cursor.execute("""
-                INSERT INTO form_questions (form_id, question_text, question_type, options, is_required, display_order)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (form_id, question_text, db_type, options_json, is_required, index))
+            # Map sectionId from frontend to database section_id
+            section_id = None
+            frontend_section_id = question.get('sectionId')
+            if frontend_section_id and section_id_column_exists:
+                # Look up database section ID from frontend section ID
+                section_id = section_id_map.get(str(frontend_section_id))
+                if frontend_section_id and not section_id:
+                    print(f"  Warning: Question '{question_text[:30]}' has sectionId '{frontend_section_id}' but not found in section_id_map. Available mappings: {section_id_map}")
+            
+            # Insert question with section_id if column exists
+            if section_id_column_exists:
+                cursor.execute("""
+                    INSERT INTO form_questions (form_id, section_id, question_text, question_type, options, is_required, display_order)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (form_id, section_id, question_text, db_type, options_json, is_required, index))
+            else:
+                cursor.execute("""
+                    INSERT INTO form_questions (form_id, question_text, question_type, options, is_required, display_order)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (form_id, question_text, db_type, options_json, is_required, index))
         
         connection.commit()
+        print(f"Form {form_id} updated successfully. Sections saved: {len(section_id_map)}, Questions saved: {len(questions)}")
         
         # Get the updated form
         cursor.execute("""
@@ -1307,29 +1796,83 @@ def delete_form_response(form_id, submission_id):
         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/forms/shared/<share_token>', methods=['GET'])
-@token_required
 def get_shared_form(share_token):
-    """Get form by share token (requires authentication)"""
+    """Get form by share token (authentication optional based on requires_login)"""
     try:
+        # Get token from Authorization header if present
+        auth_header = request.headers.get('Authorization', '')
+        token = None
+        if auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+        
         connection = get_db_connection()
         if not connection:
             return jsonify({'error': 'Database connection failed'}), 500
         
         cursor = connection.cursor(dictionary=True)
         
-        # Get form by share token (only columns that exist)
+        # Check if requires_login column exists
         cursor.execute("""
-            SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, 
-                   created_at, updated_at, last_opened_at
-            FROM forms
-            WHERE share_token = %s
-        """, (share_token,))
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'requires_login'
+        """)
+        requires_login_column_exists = cursor.fetchone() is not None
+        
+        # Get form by share token (only columns that exist)
+        if requires_login_column_exists:
+            cursor.execute("""
+                SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, requires_login,
+                       created_at, updated_at, last_opened_at
+                FROM forms
+                WHERE share_token = %s
+            """, (share_token,))
+        else:
+            cursor.execute("""
+                SELECT id, user_id, title, description, confirmation_message, accepting_responses, response_limit, is_shared, share_token, 
+                       created_at, updated_at, last_opened_at
+                FROM forms
+                WHERE share_token = %s
+            """, (share_token,))
         form = cursor.fetchone()
         
         if not form:
             cursor.close()
             connection.close()
             return jsonify({'error': 'Form not found'}), 404
+        
+        # Check if login is required
+        # MySQL returns BOOLEAN as 0/1, convert to Python boolean
+        if requires_login_column_exists:
+            requires_login = bool(form.get('requires_login', 1))  # Default to True (1) if not set
+        else:
+            requires_login = True  # Default to True for backward compatibility
+        
+        # If login is required, verify token
+        if requires_login:
+            if not token:
+                cursor.close()
+                connection.close()
+                return jsonify({'error': 'Authentication required'}), 401
+            
+            # Verify token
+            try:
+                decoded = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+                user_id = decoded.get('user_id')
+                if not user_id:
+                    cursor.close()
+                    connection.close()
+                    return jsonify({'error': 'Invalid token'}), 401
+            except jwt.ExpiredSignatureError:
+                cursor.close()
+                connection.close()
+                return jsonify({'error': 'Token expired'}), 401
+            except jwt.InvalidTokenError:
+                cursor.close()
+                connection.close()
+                return jsonify({'error': 'Invalid token'}), 401
         
         # Update last_opened_at timestamp when form is viewed
         try:
@@ -1347,13 +1890,72 @@ def get_shared_form(share_token):
         # Note: Form settings columns don't exist in current schema, so we skip those checks
         # Forms are always accepting responses by default
         
-        # Get form questions
+        # Check if sections table exists
         cursor.execute("""
-            SELECT id, question_text, question_type, options, is_required, display_order
-            FROM form_questions
-            WHERE form_id = %s
-            ORDER BY display_order ASC
-        """, (form['id'],))
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_sections'
+        """)
+        sections_table_exists = cursor.fetchone() is not None
+        
+        # Check if section_id column exists in form_questions
+        cursor.execute("""
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'form_questions' 
+            AND COLUMN_NAME = 'section_id'
+        """)
+        section_id_column_exists = cursor.fetchone() is not None
+        
+        # Get form sections if table exists
+        sections = []
+        if sections_table_exists:
+            cursor.execute("""
+                SELECT id, section_title, section_description, display_order, conditional_navigation
+                FROM form_sections
+                WHERE form_id = %s
+                ORDER BY display_order ASC
+            """, (form['id'],))
+            db_sections = cursor.fetchall()
+            print(f"Get shared form: Found {len(db_sections)} sections in database for form_id={form['id']}")
+            
+            for section in db_sections:
+                conditional_nav = None
+                if section['conditional_navigation']:
+                    try:
+                        conditional_nav = json.loads(section['conditional_navigation'])
+                    except:
+                        pass
+                
+                section_obj = {
+                    'id': str(section['id']),  # Convert to string for frontend
+                    'title': section['section_title'],
+                    'description': section.get('section_description'),
+                    'display_order': section.get('display_order', 0),
+                    'conditionalNavigation': conditional_nav
+                }
+                sections.append(section_obj)
+                print(f"  Added section: id={section_obj['id']}, title='{section_obj['title']}'")
+        
+        print(f"Get shared form: Total sections prepared: {len(sections)}")
+        
+        # Get form questions
+        if section_id_column_exists:
+            cursor.execute("""
+                SELECT id, section_id, question_text, question_type, options, is_required, display_order
+                FROM form_questions
+                WHERE form_id = %s
+                ORDER BY display_order ASC
+            """, (form['id'],))
+        else:
+            cursor.execute("""
+                SELECT id, question_text, question_type, options, is_required, display_order
+                FROM form_questions
+                WHERE form_id = %s
+                ORDER BY display_order ASC
+            """, (form['id'],))
         questions = cursor.fetchall()
         
         # Parse JSON options and extract has_other, description, validation, correct_answer, and conditional_logic
@@ -1393,11 +1995,32 @@ def get_shared_form(share_token):
                 question['points'] = points
             if conditional_logic:
                 question['conditional_logic'] = conditional_logic
+            
+            # Map section_id from database ID to frontend section object if applicable
+            if section_id_column_exists and question.get('section_id'):
+                db_section_id = question['section_id']
+                # Find the section object with matching id
+                section_obj = None
+                for section in sections:
+                    # Compare with database ID converted to string
+                    if str(db_section_id) == str(section.get('id')):
+                        section_obj = section
+                        break
+                if section_obj:
+                    question['sectionId'] = section_obj['id']
+                    print(f"  ✅ Question '{question.get('question_text', '')[:30]}' mapped to section '{section_obj.get('title', '')}' (ID: {section_obj.get('id')})")
+                else:
+                    question['sectionId'] = None
+                    print(f"  ⚠️ Question '{question.get('question_text', '')[:30]}' has section_id={db_section_id} but no matching section found. Available sections: {[s.get('id') for s in sections]}")
+            else:
+                question['sectionId'] = None
+                if section_id_column_exists:
+                    print(f"  ⚠️ Question '{question.get('question_text', '')[:30]}' has no section_id")
         
         cursor.close()
         connection.close()
         
-        return jsonify({
+        response_data = {
             'id': form['id'],
             'user_id': form['user_id'],
             'title': form['title'],
@@ -1407,10 +2030,28 @@ def get_shared_form(share_token):
             'response_limit': form.get('response_limit'),
             'is_shared': form['is_shared'],
             'share_token': form['share_token'],
+            'requires_login': bool(form.get('requires_login', 1)) if requires_login_column_exists else True,  # Convert MySQL 0/1 to boolean
             'questions': questions,
             'created_at': form['created_at'].isoformat() if form['created_at'] else None,
             'updated_at': form['updated_at'].isoformat() if form['updated_at'] else None
-        }), 200
+        }
+        
+        # Always include sections array (even if empty)
+        if sections_table_exists:
+            response_data['sections'] = sections
+            print(f"Get shared form: Returning {len(sections)} sections")
+            for i, section in enumerate(sections):
+                print(f"  Section {i}: id={section.get('id')}, title='{section.get('title')}'")
+        else:
+            response_data['sections'] = []
+            print("Get shared form: sections_table_exists=False, returning empty sections array")
+        
+        # Debug: Log questions with their sectionIds
+        print(f"Get shared form: Returning {len(questions)} questions")
+        for q in questions:
+            print(f"  Question '{q.get('question_text', '')[:30]}': sectionId={q.get('sectionId')}")
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         print(f"Get shared form error: {e}")
@@ -1429,16 +2070,74 @@ def submit_shared_form(share_token):
         
         cursor = connection.cursor(dictionary=True)
         
-        # Get form by share token (check if accepting responses and response limit)
+        # Check if requires_login column exists
         cursor.execute("""
-            SELECT id, accepting_responses, response_limit FROM forms WHERE share_token = %s
-        """, (share_token,))
+            SELECT COLUMN_NAME 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'forms' 
+            AND COLUMN_NAME = 'requires_login'
+        """)
+        requires_login_column_exists = cursor.fetchone() is not None
+        
+        # Get form by share token (check if accepting responses and response limit)
+        # Also get email notification settings and requires_login
+        if requires_login_column_exists:
+            cursor.execute("""
+                SELECT f.id, f.accepting_responses, f.response_limit, f.title, f.description, f.confirmation_message,
+                       f.email_notifications_enabled, f.email_notification_recipients, f.send_confirmation_email,
+                       f.requires_login, f.user_id, u.username
+                FROM forms f
+                LEFT JOIN users u ON f.user_id = u.id
+                WHERE f.share_token = %s
+            """, (share_token,))
+        else:
+            cursor.execute("""
+                SELECT f.id, f.accepting_responses, f.response_limit, f.title, f.description, f.confirmation_message,
+                       f.email_notifications_enabled, f.email_notification_recipients, f.send_confirmation_email,
+                       f.user_id, u.username
+                FROM forms f
+                LEFT JOIN users u ON f.user_id = u.id
+                WHERE f.share_token = %s
+            """, (share_token,))
         form = cursor.fetchone()
         
         if not form:
             cursor.close()
             connection.close()
             return jsonify({'error': 'Form not found'}), 404
+        
+        # Check if login is required
+        # MySQL returns BOOLEAN as 0/1, convert to Python boolean
+        if requires_login_column_exists:
+            requires_login = bool(form.get('requires_login', 1))  # Default to True (1) if not set
+        else:
+            requires_login = True  # Default to True for backward compatibility
+        
+        # If login is required, verify token
+        if requires_login:
+            auth_header = request.headers.get('Authorization', '')
+            if not auth_header.startswith('Bearer '):
+                cursor.close()
+                connection.close()
+                return jsonify({'error': 'Authentication required'}), 401
+            
+            token = auth_header.split(' ')[1]
+            try:
+                decoded = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+                user_id = decoded.get('user_id')
+                if not user_id:
+                    cursor.close()
+                    connection.close()
+                    return jsonify({'error': 'Invalid token'}), 401
+            except jwt.ExpiredSignatureError:
+                cursor.close()
+                connection.close()
+                return jsonify({'error': 'Token expired'}), 401
+            except jwt.InvalidTokenError:
+                cursor.close()
+                connection.close()
+                return jsonify({'error': 'Invalid token'}), 401
         
         # Check if form is accepting responses
         if not form.get('accepting_responses', True):
@@ -1565,9 +2264,9 @@ def submit_shared_form(share_token):
         # Calculate quiz score if quiz mode
         quiz_results = None
         if is_quiz:
-            # Calculate total_points from ALL questions that have points (not just those with correct answers)
-            # This includes questions for manual scoring
-            total_points = sum(question_points.values()) if question_points else 0
+            # Calculate total_points only from questions that have correct answers AND points > 0
+            # Exclude questions without points (points = 0 or None)
+            total_points = 0
             earned_points = 0
             question_results = {}
             
@@ -1576,6 +2275,10 @@ def submit_shared_form(share_token):
                 question_id_int = int(question_id) if isinstance(question_id, str) else question_id
                 user_answer = answers.get(str(question_id_int))
                 points = question_points.get(question_id_int, 1)
+                
+                # Only include questions with points > 0 in scoring
+                if points and points > 0:
+                    total_points += points
                 
                 is_correct = False
                 if user_answer is not None:
@@ -1601,16 +2304,18 @@ def submit_shared_form(share_token):
                     else:
                         is_correct = str(user_answer_normalized) == str(correct_answer_normalized)
                     
-                    if is_correct:
+                    if is_correct and points and points > 0:
                         earned_points += points
                 
-                question_results[question_id_int] = {
-                    'is_correct': is_correct,
-                    'user_answer': user_answer,
-                    'correct_answer': correct_answer,
-                    'points': points,
-                    'earned_points': points if is_correct else 0
-                }
+                # Only include in question_results if question has points > 0
+                if points and points > 0:
+                    question_results[question_id_int] = {
+                        'is_correct': is_correct,
+                        'user_answer': user_answer,
+                        'correct_answer': correct_answer,
+                        'points': points,
+                        'earned_points': points if is_correct else 0
+                    }
             
             quiz_results = {
                 'total_points': total_points,
@@ -1675,6 +2380,138 @@ def submit_shared_form(share_token):
                 """, (submission_id, int(question_id), answer_str))
         
         connection.commit()
+        
+        # Create in-app notification for form owner
+        try:
+            # Get form owner
+            cursor.execute("SELECT user_id, title FROM forms WHERE id = %s", (form_id,))
+            form_owner = cursor.fetchone()
+            
+            if form_owner:
+                owner_user_id = form_owner['user_id']
+                form_title = form_owner['title']
+                
+                # Get submitted_by username if available
+                submitted_by_text = "Anonymous"
+                if submitted_by:
+                    cursor.execute("SELECT username FROM users WHERE id = %s", (submitted_by,))
+                    user_result = cursor.fetchone()
+                    if user_result:
+                        submitted_by_text = user_result['username']
+                
+                # Check if notifications table exists
+                cursor.execute("""
+                    SELECT TABLE_NAME 
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_SCHEMA = DATABASE() 
+                    AND TABLE_NAME = 'notifications'
+                """)
+                notifications_table_exists = cursor.fetchone() is not None
+                
+                if notifications_table_exists:
+                    # Create notification message
+                    notification_message = f"New submission for '{form_title}' by {submitted_by_text}"
+                    
+                    # Insert notification
+                    cursor.execute("""
+                        INSERT INTO notifications (user_id, form_id, submission_id, message)
+                        VALUES (%s, %s, %s, %s)
+                    """, (owner_user_id, form_id, submission_id, notification_message))
+                    connection.commit()
+                    
+                    # Get the inserted notification ID
+                    notification_id = cursor.lastrowid
+                    
+                    # Send real-time notification via SSE
+                    notification_data = {
+                        'type': 'new_notification',
+                        'id': notification_id,
+                        'form_id': form_id,
+                        'submission_id': submission_id,
+                        'message': notification_message,
+                        'form_title': form_title,
+                        'is_read': False,
+                        'created_at': datetime.now(timezone.utc).isoformat()
+                    }
+                    send_notification_to_user(owner_user_id, notification_data)
+        except Exception as e:
+            print(f"Error creating notification: {e}")
+            # Don't fail the submission if notification creation fails
+        
+        # Send email notifications if enabled
+        if form.get('email_notifications_enabled') and is_email_configured():
+            try:
+                # Get recipient emails
+                recipients_str = form.get('email_notification_recipients', '').strip()
+                recipients = []
+                
+                if recipients_str:
+                    # Parse comma-separated emails
+                    recipients = [email.strip() for email in recipients_str.split(',') if email.strip()]
+                
+                # If no custom recipients, try to get form owner email
+                # For now, we'll use a placeholder - you might want to add email column to users table
+                if not recipients:
+                    # Default to form owner username as email (you may want to add email to users table)
+                    # For now, skip if no recipients configured
+                    pass
+                
+                # Send notification email to form owner/recipients
+                if recipients:
+                    # Format submission timestamp
+                    submitted_at_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+                    
+                    # Get submitted_by username if available
+                    submitted_by_username = None
+                    if submitted_by:
+                        cursor.execute("SELECT username FROM users WHERE id = %s", (submitted_by,))
+                        user_result = cursor.fetchone()
+                        if user_result:
+                            submitted_by_username = user_result['username']
+                    
+                    # Format email HTML
+                    email_html = format_submission_email_html(
+                        form_title=form.get('title', 'Untitled Form'),
+                        form_description=form.get('description'),
+                        submission_id=submission_id,
+                        submitted_at=submitted_at_str,
+                        submitted_by=submitted_by_username,
+                        answers=answers,
+                        questions=questions,
+                        quiz_results=quiz_results
+                    )
+                    
+                    # Send email
+                    send_email(
+                        to_emails=recipients,
+                        subject=f"New Submission: {form.get('title', 'Untitled Form')}",
+                        html_body=email_html
+                    )
+            except Exception as e:
+                print(f"Error sending notification email: {e}")
+                # Don't fail the submission if email fails
+        
+        # Send confirmation email to submitter if enabled
+        if form.get('send_confirmation_email') and is_email_configured():
+            try:
+                # Try to extract email from answers
+                submitter_email = extract_email_from_answers(answers, questions)
+                
+                if submitter_email:
+                    confirmation_html = format_confirmation_email_html(
+                        form_title=form.get('title', 'Untitled Form'),
+                        confirmation_message=form.get('confirmation_message')
+                    )
+                    
+                    send_email(
+                        to_emails=[submitter_email],
+                        subject=f"Submission Confirmation: {form.get('title', 'Untitled Form')}",
+                        html_body=confirmation_html
+                    )
+            except Exception as e:
+                print(f"Error sending confirmation email: {e}")
+                # Don't fail the submission if email fails
+        
         cursor.close()
         connection.close()
         
@@ -1775,6 +2612,251 @@ def update_form_settings(form_id):
         
     except Exception as e:
         print(f"Update form settings error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+def send_notification_to_user(user_id: int, notification_data: dict):
+    """Send notification to connected SSE clients for a user"""
+    with notification_lock:
+        if user_id in notification_queues:
+            for queue in notification_queues[user_id]:
+                try:
+                    queue.put(json.dumps(notification_data))
+                except:
+                    pass  # Queue might be closed
+
+@app.route('/api/notifications/stream', methods=['GET'])
+def stream_notifications():
+    """Server-Sent Events endpoint for real-time notifications"""
+    # Get token from query parameter (EventSource doesn't support custom headers)
+    token = request.args.get('token')
+    if not token:
+        return jsonify({'error': 'Token is required'}), 401
+    
+    payload = verify_token(token)
+    if not payload:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+    
+    user_id = payload['user_id']
+    
+    def generate():
+        # Create a queue for this connection
+        queue = Queue()
+        
+        # Add queue to user's notification queues
+        with notification_lock:
+            if user_id not in notification_queues:
+                notification_queues[user_id] = []
+            notification_queues[user_id].append(queue)
+        
+        try:
+            # Send initial connection message
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            
+            # Keep connection alive and send notifications
+            while True:
+                try:
+                    # Wait for notification (with timeout for keep-alive)
+                    notification = queue.get(timeout=30)
+                    yield f"data: {notification}\n\n"
+                except:
+                    # Send keep-alive ping every 30 seconds
+                    yield f": keep-alive\n\n"
+        except GeneratorExit:
+            # Clean up when client disconnects
+            with notification_lock:
+                if user_id in notification_queues:
+                    try:
+                        notification_queues[user_id].remove(queue)
+                        if not notification_queues[user_id]:
+                            del notification_queues[user_id]
+                    except:
+                        pass
+    
+    response = Response(generate(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+
+@app.route('/api/notifications', methods=['GET'])
+@token_required
+def get_notifications():
+    """Get all notifications for the current user"""
+    try:
+        user_id = request.current_user['user_id']
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Check if notifications table exists
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'notifications'
+        """)
+        notifications_table_exists = cursor.fetchone() is not None
+        
+        if not notifications_table_exists:
+            cursor.close()
+            connection.close()
+            return jsonify([]), 200
+        
+        # Get notifications for user, ordered by newest first
+        cursor.execute("""
+            SELECT n.id, n.form_id, n.submission_id, n.message, n.is_read, n.created_at,
+                   f.title as form_title
+            FROM notifications n
+            LEFT JOIN forms f ON n.form_id = f.id
+            WHERE n.user_id = %s
+            ORDER BY n.created_at DESC
+            LIMIT 50
+        """, (user_id,))
+        
+        notifications = cursor.fetchall()
+        
+        # Format timestamps
+        for notification in notifications:
+            if notification['created_at']:
+                dt = notification['created_at']
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                notification['created_at'] = dt.isoformat()
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify(notifications), 200
+        
+    except Exception as e:
+        print(f"Get notifications error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/notifications/unread-count', methods=['GET'])
+@token_required
+def get_unread_notifications_count():
+    """Get count of unread notifications for the current user"""
+    try:
+        user_id = request.current_user['user_id']
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Check if notifications table exists
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = 'notifications'
+        """)
+        notifications_table_exists = cursor.fetchone() is not None
+        
+        if not notifications_table_exists:
+            cursor.close()
+            connection.close()
+            return jsonify({'count': 0}), 200
+        
+        # Get unread count
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM notifications
+            WHERE user_id = %s AND is_read = FALSE
+        """, (user_id,))
+        
+        result = cursor.fetchone()
+        count = result['count'] if result else 0
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'count': count}), 200
+        
+    except Exception as e:
+        print(f"Get unread notifications count error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/notifications/<int:notification_id>/read', methods=['PUT'])
+@token_required
+def mark_notification_read(notification_id):
+    """Mark a notification as read"""
+    try:
+        user_id = request.current_user['user_id']
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Check if notification exists and belongs to user
+        cursor.execute("""
+            SELECT id FROM notifications WHERE id = %s AND user_id = %s
+        """, (notification_id, user_id))
+        
+        notification = cursor.fetchone()
+        
+        if not notification:
+            cursor.close()
+            connection.close()
+            return jsonify({'error': 'Notification not found'}), 404
+        
+        # Mark as read
+        cursor.execute("""
+            UPDATE notifications SET is_read = TRUE WHERE id = %s
+        """, (notification_id,))
+        
+        connection.commit()
+        
+        # Send real-time update
+        notification_data = {
+            'type': 'notification_read',
+            'id': notification_id
+        }
+        send_notification_to_user(user_id, notification_data)
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'message': 'Notification marked as read'}), 200
+        
+    except Exception as e:
+        print(f"Mark notification read error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/notifications/read-all', methods=['PUT'])
+@token_required
+def mark_all_notifications_read():
+    """Mark all notifications as read for the current user"""
+    try:
+        user_id = request.current_user['user_id']
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Mark all as read
+        cursor.execute("""
+            UPDATE notifications SET is_read = TRUE WHERE user_id = %s AND is_read = FALSE
+        """, (user_id,))
+        
+        connection.commit()
+        
+        # Send real-time update
+        notification_data = {
+            'type': 'all_notifications_read'
+        }
+        send_notification_to_user(user_id, notification_data)
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'message': 'All notifications marked as read'}), 200
+        
+    except Exception as e:
+        print(f"Mark all notifications read error: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/forms/<int:form_id>/responses/export', methods=['GET'])
@@ -1916,6 +2998,164 @@ def export_form_responses(form_id):
         
     except Exception as e:
         print(f"Export responses error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/api/v1/quiz/results', methods=['GET'])
+@api_key_required
+def get_quiz_results():
+    """Get quiz results by quiz-id (form_id) - requires API key authentication"""
+    try:
+        # Get quiz-id from query parameters
+        quiz_id = request.args.get('quiz-id') or request.args.get('quiz_id')
+        
+        if not quiz_id:
+            return jsonify({'error': 'quiz-id parameter is required'}), 400
+        
+        try:
+            quiz_id = int(quiz_id)
+        except ValueError:
+            return jsonify({'error': 'Invalid quiz-id. Must be a number'}), 400
+        
+        connection = get_db_connection()
+        if not connection:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Verify that the form exists and is a quiz
+        cursor.execute("""
+            SELECT id, title, description, is_quiz
+            FROM forms
+            WHERE id = %s
+        """, (quiz_id,))
+        form = cursor.fetchone()
+        
+        if not form:
+            cursor.close()
+            connection.close()
+            return jsonify({'error': 'Quiz not found'}), 404
+        
+        if not form.get('is_quiz', False):
+            cursor.close()
+            connection.close()
+            return jsonify({'error': 'The specified form is not a quiz'}), 400
+        
+        # Get all quiz submissions with results
+        try:
+            cursor.execute("""
+                SELECT s.id, s.submitted_by, s.submitted_at, u.username, s.quiz_results, s.manual_scores, s.total_score
+                FROM form_submissions s
+                LEFT JOIN users u ON s.submitted_by = u.id
+                WHERE s.form_id = %s
+                ORDER BY s.submitted_at DESC
+            """, (quiz_id,))
+        except mysql.connector.Error:
+            # quiz_results column might not exist, use basic query
+            cursor.execute("""
+                SELECT s.id, s.submitted_by, s.submitted_at, u.username
+                FROM form_submissions s
+                LEFT JOIN users u ON s.submitted_by = u.id
+                WHERE s.form_id = %s
+                ORDER BY s.submitted_at DESC
+            """, (quiz_id,))
+        
+        submissions = cursor.fetchall()
+        
+        # Get all answers for these submissions
+        results = []
+        for submission in submissions:
+            # Get answers for this submission
+            cursor.execute("""
+                SELECT qa.question_id, qa.answer_text, q.question_text, q.question_type
+                FROM form_submission_answers qa
+                INNER JOIN form_questions q ON qa.question_id = q.id
+                WHERE qa.submission_id = %s
+                ORDER BY q.display_order ASC
+            """, (submission['id'],))
+            answers = cursor.fetchall()
+            
+            # Organize answers by question_id
+            answers_dict = {}
+            for answer in answers:
+                question_id = answer['question_id']
+                answer_text = answer['answer_text']
+                
+                # Try to parse JSON if it's a checkbox/multiple choice answer
+                try:
+                    parsed = json.loads(answer_text)
+                    if isinstance(parsed, list):
+                        answers_dict[question_id] = parsed
+                    else:
+                        if question_id not in answers_dict:
+                            answers_dict[question_id] = []
+                        answers_dict[question_id].append(str(parsed))
+                except:
+                    # Regular text answer
+                    if question_id not in answers_dict:
+                        answers_dict[question_id] = []
+                    answers_dict[question_id].append(answer_text)
+            
+            # Format submitted_at with timezone awareness
+            submitted_at_iso = None
+            if submission['submitted_at']:
+                dt = submission['submitted_at']
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                submitted_at_iso = dt.isoformat()
+            
+            # Parse quiz_results if available
+            quiz_results = None
+            manual_scores = None
+            total_score = None
+            
+            if submission.get('quiz_results'):
+                try:
+                    quiz_results = json.loads(submission['quiz_results']) if isinstance(submission['quiz_results'], str) else submission['quiz_results']
+                except:
+                    pass
+            
+            if submission.get('manual_scores'):
+                try:
+                    manual_scores = json.loads(submission['manual_scores']) if isinstance(submission['manual_scores'], str) else submission['manual_scores']
+                except:
+                    pass
+            
+            total_score = submission.get('total_score')
+            if total_score is not None:
+                try:
+                    total_score = float(total_score)
+                except (ValueError, TypeError):
+                    total_score = None
+            
+            results.append({
+                'submission_id': submission['id'],
+                'submitted_at': submitted_at_iso,
+                'submitted_by': submission['username'] or (f"User #{submission['submitted_by']}" if submission['submitted_by'] else 'Anonymous'),
+                'user_id': submission['submitted_by'],
+                'answers': answers_dict,
+                'quiz_results': quiz_results,
+                'manual_scores': manual_scores,
+                'total_score': total_score,
+                'score_percentage': quiz_results.get('score_percentage') if quiz_results else None,
+                'earned_points': quiz_results.get('earned_points') if quiz_results else None,
+                'total_points': quiz_results.get('total_points') if quiz_results else None
+            })
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({
+            'quiz_id': quiz_id,
+            'quiz_title': form['title'],
+            'quiz_description': form.get('description'),
+            'total_submissions': len(results),
+            'results': results
+        }), 200
+        
+    except Exception as e:
+        print(f"Get quiz results error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':

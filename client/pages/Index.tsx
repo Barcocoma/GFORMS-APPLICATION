@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Layout } from "@/components/layout/Layout";
+import { AdminLayout } from "@/components/layout/AdminLayout";
 import { FormCard } from "@/components/forms/FormCard";
 import { Button } from "@/components/ui/button";
 import { Plus, Loader2, Eye, EyeOff, Settings, FileQuestion, Filter } from "lucide-react";
@@ -27,7 +28,7 @@ import {
 type TemplateKey = "contact" | "feedback" | "event" | "survey" | "quiz" | "job" | "satisfaction" | "order" | "rsvp" | "registration" | "review" | "service" | "assessment";
 
 export default function Index() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [forms, setForms] = useState<Form[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -128,17 +129,17 @@ export default function Index() {
     return (
       <div key={templateKey} className="relative group flex-shrink-0">
         <Link to={link}>
-          <div className={`w-[13rem] sm:w-56 h-40 rounded-xl border border-gray-200 bg-gradient-to-br ${gradientFrom} via-white ${gradientTo} hover:shadow-lg ${hoverBorderClasses[templateKey]} transition-all duration-200 flex flex-col overflow-hidden cursor-pointer`}>
+          <div className={`w-[13rem] sm:w-56 h-40 rounded-xl border border-slate-300 bg-gradient-to-br ${gradientFrom} via-slate-100 ${gradientTo} hover:shadow-lg ${hoverBorderClasses[templateKey]} transition-all duration-200 flex flex-col overflow-hidden cursor-pointer`}>
             <div className="flex-1 flex items-center justify-center">
               <div className={`w-12 h-12 rounded-xl ${iconBg} flex items-center justify-center shadow-md`}>
                 <span className="text-white text-lg font-semibold">{iconText}</span>
               </div>
             </div>
-            <div className="border-t border-gray-100 px-4 py-3 bg-white/70">
+            <div className="border-t border-slate-200 px-4 py-3 bg-slate-100/80">
               <p className="text-sm font-semibold text-gray-900 truncate">
                 {title}
               </p>
-              <p className="text-xs text-gray-500 line-clamp-2">
+              <p className="text-xs text-gray-600 line-clamp-2">
                 {description}
               </p>
             </div>
@@ -288,45 +289,48 @@ export default function Index() {
     });
 
   if (isLoading) {
+    const LoadingLayout = user?.role === 'admin' ? AdminLayout : Layout;
     return (
-      <Layout>
+      <LoadingLayout>
         <div className="flex items-center justify-center min-h-[400px]">
           <Loader2 className="h-8 w-8 animate-spin text-gray-600" />
         </div>
-      </Layout>
+      </LoadingLayout>
     );
   }
+  
+  const ContentLayout = user?.role === 'admin' ? AdminLayout : Layout;
   return (
-    <Layout>
+    <ContentLayout>
       <div className="space-y-8">
         {/* Hero Section */}
         <div className="space-y-6">
           <div className="space-y-2">
-            <h2 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent">
-              Your Forms
+            <h2 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-slate-50 via-slate-100 to-slate-200 bg-clip-text text-transparent">
+              My Forms
             </h2>
-            <p className="text-gray-600 text-lg">
+            <p className="text-slate-200 text-lg">
               Create, manage, and share forms to collect responses from your audience
             </p>
           </div>
         </div>
 
         {/* Start a new form (Google Forms-style) */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-gray-800">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+            <h3 className="text-base font-semibold text-white drop-shadow-sm">
               Add a new form
             </h3>
             <Button
               variant="outline"
               size="sm"
               onClick={() => setShowManageDialog(true)}
-              className="text-xs text-gray-600 hover:text-gray-900 h-8 px-3 gap-2"
+              className="text-xs text-white bg-slate-700/50 hover:bg-slate-600/60 border-slate-500/50 h-8 px-3 gap-2"
             >
               <Settings className="w-3 h-3" />
               Manage Templates
               {hiddenTemplates.size > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-700 text-[10px] font-semibold">
+                <span className="ml-1 px-1.5 py-0.5 rounded-full bg-slate-600 text-white text-[10px] font-semibold">
                   {hiddenTemplates.size} hidden
                 </span>
               )}
@@ -336,17 +340,17 @@ export default function Index() {
           <div className="flex gap-3 sm:gap-4 overflow-x-auto pb-3 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 md:overflow-visible">
             {/* Blank form */}
             <Link to="/create" className="flex-shrink-0">
-              <div className="w-[13rem] sm:w-56 h-40 rounded-xl border border-gray-200 bg-gradient-to-br from-primary/5 via-white to-primary/10 hover:shadow-lg hover:border-primary/40 transition-all duration-200 flex flex-col overflow-hidden cursor-pointer">
+              <div className="w-[13rem] sm:w-56 h-40 rounded-xl border border-slate-300 bg-gradient-to-br from-primary/10 via-slate-100 to-primary/15 hover:shadow-lg hover:border-primary/40 transition-all duration-200 flex flex-col overflow-hidden cursor-pointer">
                 <div className="flex-1 flex items-center justify-center">
                   <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center shadow-md">
                     <Plus className="w-6 h-6 text-white" />
                   </div>
                 </div>
-                <div className="border-t border-gray-100 px-4 py-3 bg-white/70">
+                <div className="border-t border-slate-200 px-4 py-3 bg-slate-100/80">
                   <p className="text-sm font-semibold text-gray-900 truncate">
                     Blank form
                   </p>
-                  <p className="text-xs text-gray-500 line-clamp-2">
+                  <p className="text-xs text-gray-600 line-clamp-2">
                     Create a form from scratch
                   </p>
                 </div>
@@ -355,18 +359,18 @@ export default function Index() {
 
             {/* Quiz form */}
             <Link to="/create?template=quiz" className="flex-shrink-0">
-              <div className="w-[13rem] sm:w-56 h-40 rounded-xl border border-gray-200 bg-gradient-to-br from-red-50 via-white to-red-100 hover:shadow-lg hover:border-red-300 transition-all duration-200 flex flex-col overflow-hidden cursor-pointer">
+              <div className="w-[13rem] sm:w-56 h-40 rounded-xl border border-slate-300 bg-gradient-to-br from-red-100 via-slate-100 to-red-200 hover:shadow-lg hover:border-red-300 transition-all duration-200 flex flex-col overflow-hidden cursor-pointer">
                 <div className="flex-1 flex items-center justify-center">
                   <div className="w-12 h-12 rounded-xl bg-red-500 flex items-center justify-center shadow-md">
                     <FileQuestion className="w-6 h-6 text-white" />
                   </div>
                 </div>
-                <div className="border-t border-gray-100 px-4 py-3 bg-white/70">
+                <div className="border-t border-slate-200 px-4 py-3 bg-slate-100/80">
                   <p className="text-sm font-semibold text-gray-900 truncate">
                     Quiz
                   </p>
-                  <p className="text-xs text-gray-500 line-clamp-2">
-                    Creat a quiz
+                  <p className="text-xs text-gray-600 line-clamp-2">
+                    Create a quiz
                   </p>
                 </div>
               </div>
@@ -519,14 +523,14 @@ export default function Index() {
         {forms.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-3">
-              <h3 className="text-base font-semibold text-gray-800">
+              <h3 className="text-base font-semibold text-white drop-shadow-sm">
                 Recent forms
               </h3>
               <div className="flex items-center gap-2 flex-wrap">
                 <Select value={filterType} onValueChange={(value: "all" | "quiz" | "regular") => setFilterType(value)}>
-                  <SelectTrigger className="w-[140px] h-9">
-                    <Filter className="w-4 h-4 mr-2" />
-                    <SelectValue placeholder="Filter" />
+                  <SelectTrigger className="w-[140px] h-9 bg-white/95 border-slate-200 text-black font-semibold">
+                    <Filter className="w-4 h-4 mr-2 text-black" />
+                    <SelectValue placeholder="Filter" className="text-black" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Forms</SelectItem>
@@ -535,8 +539,8 @@ export default function Index() {
                   </SelectContent>
                 </Select>
                 <Select value={sortBy} onValueChange={(value: "recent" | "created" | "responses" | "alphabetical") => setSortBy(value)}>
-                  <SelectTrigger className="w-[160px] h-9">
-                    <SelectValue placeholder="Sort by" />
+                  <SelectTrigger className="w-[160px] h-9 bg-white/95 border-slate-200 text-black font-semibold">
+                    <SelectValue placeholder="Sort by" className="text-black" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="recent">Recently Opened</SelectItem>
@@ -561,7 +565,7 @@ export default function Index() {
                   />
                 ))}
               {filteredForms.length === 0 && (
-                <p className="text-sm text-gray-500 col-span-full">
+                <p className="text-sm text-white col-span-full">
                   No forms match your search.
                 </p>
               )}
@@ -678,6 +682,6 @@ export default function Index() {
           </DialogContent>
         </Dialog>
       </div>
-    </Layout>
+    </ContentLayout>
   );
 }

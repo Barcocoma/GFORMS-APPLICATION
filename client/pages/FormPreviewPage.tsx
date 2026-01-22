@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { FormPreview } from "@/components/forms/FormPreview";
-import { Question } from "@/components/forms/FormEditor";
+import { Question, Section } from "@/components/forms/FormEditor";
 
 export default function FormPreviewPage() {
   const location = useLocation();
@@ -10,6 +10,9 @@ export default function FormPreviewPage() {
     title: string;
     description: string;
     questions: Question[];
+    sections?: Section[];
+    formId?: string;
+    editMode?: boolean;
   } | null;
 
   if (!state) {
@@ -31,12 +34,30 @@ export default function FormPreviewPage() {
     );
   }
 
+  const handleBack = () => {
+    if (state?.formId && state?.editMode) {
+      // If editing an existing form, navigate back to edit page with formId
+      navigate(`/create?edit=${state.formId}`, { 
+        state: {
+          title: state.title,
+          description: state.description,
+          questions: state.questions,
+          sections: state.sections,
+        }
+      });
+    } else {
+      // If creating a new form, navigate back to create page with form data
+      navigate("/create", { state });
+    }
+  };
+
   return (
     <FormPreview
       title={state.title}
       description={state.description}
       questions={state.questions}
-      onBack={() => navigate("/create", { state })}
+      sections={state.sections}
+      onBack={handleBack}
     />
   );
 }

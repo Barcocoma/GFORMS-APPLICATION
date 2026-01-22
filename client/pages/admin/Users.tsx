@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { User, CreateUserRequest } from '@shared/api';
-import { Layout } from '@/components/layout/Layout';
+import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -38,6 +38,8 @@ export default function AdminUsers() {
   
   // Form state for multiple users
   const [userList, setUserList] = useState<CreateUserRequest[]>([]);
+  const [sortField, setSortField] = useState<'id' | 'username' | 'role' | 'created_at'>('id');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   useEffect(() => {
     fetchUsers();
@@ -62,6 +64,33 @@ export default function AdminUsers() {
       setError(err instanceof Error ? err.message : 'Failed to load users');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const sortedUsers = [...users].sort((a, b) => {
+    let aVal: string | number = a[sortField];
+    let bVal: string | number = b[sortField];
+
+    if (sortField === 'created_at') {
+      aVal = new Date((a as any).created_at).getTime();
+      bVal = new Date((b as any).created_at).getTime();
+    }
+
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      const cmp = aVal.localeCompare(bVal);
+      return sortDirection === 'asc' ? cmp : -cmp;
+    }
+
+    const cmp = (aVal as number) - (bVal as number);
+    return sortDirection === 'asc' ? cmp : -cmp;
+  });
+
+  const handleSort = (field: 'id' | 'username' | 'role' | 'created_at') => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
     }
   };
 
@@ -148,17 +177,17 @@ export default function AdminUsers() {
   }
 
   return (
-    <Layout>
+    <AdminLayout>
       <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="space-y-2">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 bg-clip-text text-transparent flex items-center gap-3">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-slate-50 via-slate-100 to-slate-200 bg-clip-text text-transparent flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center">
               <Users className="h-7 w-7 text-blue-600" />
             </div>
             Manage Users
           </h1>
-          <p className="text-gray-600 text-lg">View and manage all registered users</p>
+          <p className="text-slate-200 text-lg">View and manage all registered users</p>
         </div>
         <div className="flex gap-2">
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -288,7 +317,9 @@ export default function AdminUsers() {
             </DialogContent>
           </Dialog>
           <Link to="/admin">
-            <Button variant="outline">Back to Dashboard</Button>
+            <Button className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white shadow-md hover:shadow-lg transition-all duration-200">
+              Back to Dashboard
+            </Button>
           </Link>
         </div>
       </div>
@@ -308,10 +339,30 @@ export default function AdminUsers() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50/50">
-                <TableHead className="font-semibold">ID</TableHead>
-                <TableHead className="font-semibold">Username</TableHead>
-                <TableHead className="font-semibold">Role</TableHead>
-                <TableHead className="font-semibold">Created At</TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('id')}
+                >
+                  ID {sortField === 'id' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('username')}
+                >
+                  Username {sortField === 'username' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('role')}
+                >
+                  Role {sortField === 'role' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
+                <TableHead
+                  className="font-semibold cursor-pointer"
+                  onClick={() => handleSort('created_at')}
+                >
+                  Created At {sortField === 'created_at' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -322,7 +373,7 @@ export default function AdminUsers() {
                   </TableCell>
                 </TableRow>
               ) : (
-                users.map((user) => (
+                sortedUsers.map((user) => (
                   <TableRow key={user.id}>
                     <TableCell>{user.id}</TableCell>
                     <TableCell className="font-medium">{user.username}</TableCell>
@@ -342,7 +393,7 @@ export default function AdminUsers() {
         </CardContent>
       </Card>
       </div>
-    </Layout>
+    </AdminLayout>
   );
 }
 

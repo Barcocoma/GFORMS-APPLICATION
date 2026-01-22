@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiz Results API Tester</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 600;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            display: none;
+        }
+        .result.show {
+            display: block;
+        }
+        .result h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .result.success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+        }
+        .result.error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .info {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        .info p {
+            margin: 5px 0;
+            color: #1976D2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Quiz Results API Tester</h1>
+        <p class="subtitle">Test the Quiz Results API endpoint with API key authentication</p>
+        
+        <div class="info">
+            <p><strong>📝 Instructions:</strong></p>
+            <p>1. Enter your API Key (default: test-api-key-12345)</p>
+            <p>2. Enter Quiz ID (example: 38)</p>
+            <p>3. Click "Get Quiz Results"</p>
+        </div>
+
+        <form id="apiForm">
+            <div class="form-group">
+                <label for="apiKey">API Key:</label>
+                <input 
+                    type="text" 
+                    id="apiKey" 
+                    value="test-api-key-12345" 
+                    placeholder="Enter your API key"
+                    required
+                >
+            </div>
+            
+            <div class="form-group">
+                <label for="quizId">Quiz ID:</label>
+                <input 
+                    type="number" 
+                    id="quizId" 
+                    value="38" 
+                    placeholder="Enter quiz ID"
+                    required
+                >
+            </div>
+            
+            <button type="submit">Get Quiz Results</button>
+        </form>
+
+        <div id="result" class="result">
+            <h3 id="resultTitle"></h3>
+            <pre id="resultContent"></pre>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('apiForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const apiKey = document.getElementById('apiKey').value;
+            const quizId = document.getElementById('quizId').value;
+            const resultDiv = document.getElementById('result');
+            const resultTitle = document.getElementById('resultTitle');
+            const resultContent = document.getElementById('resultContent');
+            
+            // Show loading
+            resultDiv.className = 'result show';
+            resultTitle.textContent = 'Loading...';
+            resultContent.textContent = 'Sending request...';
+            
+            try {
+                const url = `http://localhost:5000/api/v1/quiz/results?quiz-id=${quizId}`;
+                
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'api-key': apiKey
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'result show success';
+                    resultTitle.textContent = `✅ Success! (Status: ${response.status})`;
+                    resultContent.textContent = JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'result show error';
+                    resultTitle.textContent = `❌ Error (Status: ${response.status})`;
+                    resultContent.textContent = JSON.stringify(data, null, 2);
+                }
+            } catch (error) {
+                resultDiv.className = 'result show error';
+                resultTitle.textContent = '❌ Network Error';
+                resultContent.textContent = `Error: ${error.message}\n\nMake sure:\n1. Backend server is running on port 5000\n2. CORS is enabled\n3. You're accessing from the correct URL`;
+            }
+        });
+    </script>
+</body>
+</html>
+

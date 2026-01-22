@@ -1,11 +1,12 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, LoginRequest, LoginResponse } from '@shared/api';
+import { User, LoginRequest, LoginResponse, UpdateProfileRequest, UpdateProfileResponse } from '@shared/api';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (credentials: LoginRequest) => Promise<void>;
   logout: () => void;
+  updateProfile: (data: UpdateProfileRequest) => Promise<void>;
   isLoading: boolean;
   isAuthenticated: boolean;
 }
@@ -115,6 +116,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('user');
   };
 
+  const updateProfile = async (data: UpdateProfileRequest) => {
+    if (!token) {
+      throw new Error('Not authenticated');
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      const response = await fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(data),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Failed to update profile' }));
+        throw new Error(error.error || 'Failed to update profile');
+      }
+
+      const result: UpdateProfileResponse = await response.json();
+      
+      // Update user in state and localStorage
+      setUser(result.user);
+      localStorage.setItem('user', JSON.stringify(result.user));
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Connection timeout - make sure backend is running');
+      }
+      throw error;
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -122,6 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         token,
         login,
         logout,
+        updateProfile,
         isLoading,
         isAuthenticated: !!user && !!token,
       }}

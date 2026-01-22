@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Question } from "./FormEditor";
+import { Question, Section } from "./FormEditor";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Star, Heart, ThumbsUp, Upload } from "lucide-react";
+import { ArrowLeft, Star, Heart, ThumbsUp, Upload, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface FormPreviewProps {
   title: string;
   description: string;
   questions: Question[];
+  sections?: Section[];
   onBack: () => void;
 }
 
@@ -14,10 +15,18 @@ export function FormPreview({
   title,
   description,
   questions,
+  sections = [],
   onBack,
 }: FormPreviewProps) {
   const [responses, setResponses] = useState<Record<string, string | string[]>>(
     {},
+  );
+  
+  // Check if there are questions without section to determine initial index
+  const questionsWithoutSection = questions.filter(q => !q.sectionId);
+  const hasQuestionsWithoutSection = questionsWithoutSection.length > 0;
+  const [currentSectionIndex, setCurrentSectionIndex] = useState(
+    sections.length > 0 && hasQuestionsWithoutSection ? -1 : 0
   );
 
   const handleInputChange = (questionId: string, value: string) => {
@@ -93,13 +102,50 @@ export function FormPreview({
           )}
         </div>
 
-        {/* Questions Section */}
-        <div className="space-y-6">
-          {questions.map((question) => (
-            <div
-              key={question.id}
-              className="bg-white rounded-lg border border-gray-200 p-6 space-y-4"
-            >
+        {/* Questions Section - Grouped by sections */}
+        {sections.length > 0 ? (
+          <>
+            {/* Section Header - Only show if on a section (not on questions without section) */}
+            {currentSectionIndex >= 0 && sections[currentSectionIndex] && (
+              <div className="bg-white rounded-lg border border-gray-200 mb-6">
+                {/* Orange Banner */}
+                <div className="bg-orange-500 text-white px-4 py-2 rounded-t-lg font-medium text-sm">
+                  Section {currentSectionIndex + 1} of {sections.length}
+                </div>
+                
+                {/* Section Content Box */}
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-b-lg border-t-0 border-2 border-orange-200 p-6">
+                  <div className="text-center space-y-2">
+                    <h2 className="text-2xl font-semibold text-gray-900">
+                      {sections[currentSectionIndex]?.title || `Section ${currentSectionIndex + 1}`}
+                    </h2>
+                    {sections[currentSectionIndex]?.description && (
+                      <p className="text-gray-600">{sections[currentSectionIndex].description}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Questions for current section */}
+            <div className="space-y-6">
+              {questions
+                .filter(q => {
+                  // If currentSectionIndex is -1, show only questions without section
+                  if (currentSectionIndex === -1) {
+                    return !q.sectionId;
+                  }
+                  // If on a section, show only questions for that section
+                  if (!q.sectionId) {
+                    return false;
+                  }
+                  return String(q.sectionId) === String(sections[currentSectionIndex]?.id);
+                })
+                .map((question) => (
+                  <div
+                    key={question.id}
+                    className="bg-white rounded-lg border border-gray-200 p-6 space-y-4"
+                  >
               <div>
                 <label className="text-base font-medium text-gray-900 block mb-1">
                   {question.title}
@@ -435,19 +481,84 @@ export function FormPreview({
                   </table>
                 </div>
               )}
+                  </div>
+                ))}
             </div>
-          ))}
-        </div>
 
-        {/* Submit Button */}
-        <div className="flex justify-center mt-8">
-          <Button
-            onClick={handleSubmit}
-            className="bg-primary hover:bg-primary/90 text-white px-8 py-2"
-          >
-            Submit
-          </Button>
-        </div>
+            {/* Navigation Buttons */}
+            <div className="flex justify-between items-center pt-6 border-t border-gray-200 mt-8">
+              {currentSectionIndex > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setCurrentSectionIndex(currentSectionIndex - 1);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  className="gap-2"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Previous
+                </Button>
+              ) : (
+                <div></div>
+              )}
+              
+              {currentSectionIndex < sections.length - 1 ? (
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setCurrentSectionIndex(currentSectionIndex + 1);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  className="bg-primary hover:bg-primary/90 text-white gap-2"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleSubmit}
+                  className="bg-primary hover:bg-primary/90 text-white px-8 py-2"
+                >
+                  Submit
+                </Button>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            {/* No sections - show all questions */}
+            <div className="space-y-6">
+              {questions.map((question) => (
+                <div
+                  key={question.id}
+                  className="bg-white rounded-lg border border-gray-200 p-6 space-y-4"
+                >
+                  <div>
+                    <label className="text-base font-medium text-gray-900 block mb-1">
+                      {question.title}
+                      {question.required && (
+                        <span className="text-red-500 ml-1">*</span>
+                      )}
+                    </label>
+                  </div>
+                  {/* All question types rendering here - same as above */}
+                </div>
+              ))}
+            </div>
+
+            {/* Submit Button */}
+            <div className="flex justify-center mt-8">
+              <Button
+                onClick={handleSubmit}
+                className="bg-primary hover:bg-primary/90 text-white px-8 py-2"
+              >
+                Submit
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

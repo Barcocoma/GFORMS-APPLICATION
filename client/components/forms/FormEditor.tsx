@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { Eye, Loader2, Copy, Check, ArrowLeft, Plus, Settings, FileQuestion, MessageSquare } from "lucide-react";
+import { Eye, Loader2, Copy, Check, ArrowLeft, Plus, Settings, FileQuestion, MessageSquare, Minus, X, ChevronRight, Image, Video, Type, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { QuestionBuilder } from "./QuestionBuilder";
 import { ResponsesView } from "./ResponsesView";
 import { useToast } from "@/components/ui/use-toast";
@@ -50,12 +50,20 @@ export interface Question {
   conditionalLogic?: ConditionalLogic; // Conditional logic rules
   correctAnswer?: string | string[]; // Correct answer for quiz mode
   points?: number; // Points for this question (default: 1)
+  sectionId?: string | null; // Section this question belongs to
+}
+
+export interface ConditionalSectionNavigation {
+  questionId?: string; // Question ID that triggers the navigation
+  answer?: string | string[]; // Answer value(s) that trigger navigation to this section
+  operator?: 'equals' | 'contains' | 'not_equals'; // How to compare the answer
 }
 
 export interface Section {
   id: string;
   title: string;
   description?: string;
+  conditionalNavigation?: ConditionalSectionNavigation; // Conditional navigation rules
 }
 
 export function FormEditor({ formId: initialFormId, template: initialTemplate }: FormEditorProps) {
@@ -63,6 +71,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
   const { toast } = useToast();
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   
   // Get formId from URL params (updated after save) or from props
   const currentFormId = searchParams.get("edit") || initialFormId;
@@ -72,6 +81,10 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
   const [confirmationMessage, setConfirmationMessage] = useState("");
   const [acceptingResponses, setAcceptingResponses] = useState(true);
   const [responseLimit, setResponseLimit] = useState<number | null>(null);
+  const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(false);
+  const [emailNotificationRecipients, setEmailNotificationRecipients] = useState("");
+  const [sendConfirmationEmail, setSendConfirmationEmail] = useState(false);
+  const [requiresLogin, setRequiresLogin] = useState(true);
   // Quiz is determined by template type for new forms, or by is_quiz from database for existing forms
   const [isQuizFromDb, setIsQuizFromDb] = useState(false);
   const isQuiz = currentFormId ? isQuizFromDb : (currentTemplate === "quiz");
@@ -108,9 +121,11 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
         formTitle,
         formDescription,
         questions,
+        sections,
         confirmationMessage,
         acceptingResponses,
         responseLimit,
+        requiresLogin,
         // Note: isQuiz is determined by template, not stored in draft
         timestamp: Date.now(),
       };
@@ -134,9 +149,11 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
           setFormTitle(parsed.formTitle || "");
           setFormDescription(parsed.formDescription || "");
           setQuestions(parsed.questions || []);
+          setSections(parsed.sections || []);
           setConfirmationMessage(parsed.confirmationMessage || "");
           setAcceptingResponses(parsed.acceptingResponses !== undefined ? parsed.acceptingResponses : true);
           setResponseLimit(parsed.responseLimit || null);
+          setRequiresLogin(parsed.requiresLogin !== undefined ? parsed.requiresLogin : true);
           // Note: isQuiz is now determined by template, not stored in draft
           return true; // Draft was loaded
         } else {
@@ -701,6 +718,24 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
 
   // Load form data if editing or from localStorage/template
   useEffect(() => {
+    // CRITICAL: If coming back from preview, restore state from location.state first
+    const locationState = location.state as {
+      title?: string;
+      description?: string;
+      questions?: Question[];
+      sections?: Section[];
+    } | null;
+    
+    if (locationState && (locationState.title || locationState.questions)) {
+      // Restore form state from preview navigation
+      if (locationState.title) setFormTitle(locationState.title);
+      if (locationState.description !== undefined) setFormDescription(locationState.description);
+      if (locationState.questions) setQuestions(locationState.questions);
+      if (locationState.sections) setSections(locationState.sections);
+      setInitializedFromTemplate(true);
+      return; // Don't load from server or template if we have state from preview
+    }
+    
     if (currentFormId && token) {
       // Try to load draft first, then load from server
       const draftLoaded = loadDraftFromLocalStorage();
@@ -738,7 +773,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
       
       setInitializedFromTemplate(true);
     }
-  }, [currentFormId, token, initializedFromTemplate, currentTemplate]);
+  }, [currentFormId, token, initializedFromTemplate, currentTemplate, location.state]);
 
   // Save draft to localStorage whenever form data changes (debounced)
   useEffect(() => {
@@ -749,7 +784,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
     }, 1000); // Debounce: save 1 second after last change
 
     return () => clearTimeout(timeoutId);
-  }, [formTitle, formDescription, questions, confirmationMessage, acceptingResponses, responseLimit, isQuiz, initializedFromTemplate, currentTemplate]);
+  }, [formTitle, formDescription, questions, sections, confirmationMessage, acceptingResponses, responseLimit, isQuiz, initializedFromTemplate, currentTemplate]);
 
   const loadFormData = async () => {
     // Don't call API if formId is undefined
@@ -778,6 +813,30 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
       // Set isQuiz from database for existing forms
       setIsQuizFromDb(data.is_quiz !== undefined ? data.is_quiz : false);
       setSubmissionCount(data.submission_count || 0);
+      // Load email settings
+      setEmailNotificationsEnabled(data.email_notifications_enabled || false);
+      setEmailNotificationRecipients(data.email_notification_recipients || "");
+      setSendConfirmationEmail(data.send_confirmation_email || false);
+      // Load requires_login setting
+      setRequiresLogin(data.requires_login !== undefined ? (data.requires_login === true || data.requires_login === 1) : true);
+      
+      // Load sections if they exist
+      if (data.sections && Array.isArray(data.sections) && data.sections.length > 0) {
+        const mappedSections: Section[] = data.sections.map((s: any) => ({
+          id: String(s.id || s.id?.toString() || Date.now().toString()), // Ensure ID is always a string
+          title: s.title || s.section_title || 'Untitled Section',
+          description: s.description || s.section_description,
+          conditionalNavigation: s.conditionalNavigation || s.conditional_navigation,
+        }));
+        setSections(mappedSections);
+        
+        // Debug: Log loaded sections
+        console.log('Loaded sections from backend:', mappedSections);
+      } else {
+        setSections([]);
+        // Debug: Log if no sections found
+        console.log('No sections found in form data:', data.sections);
+      }
       
       // Convert database questions to frontend format
       const mappedQuestions: Question[] = data.questions.map((q: any) => {
@@ -800,6 +859,25 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
           }
         }
 
+        // Map sectionId - ensure it matches section IDs (both as strings)
+        // First, try to get sectionId from the question
+        let sectionId = null;
+        if (q.sectionId !== undefined && q.sectionId !== null) {
+          sectionId = String(q.sectionId);
+        } else if (q.section_id !== undefined && q.section_id !== null) {
+          sectionId = String(q.section_id);
+        }
+        
+        // Verify that the sectionId actually exists in the loaded sections
+        // This ensures we don't have orphaned sectionIds
+        if (sectionId && data.sections && Array.isArray(data.sections)) {
+          const sectionExists = data.sections.some((s: any) => String(s.id) === sectionId);
+          if (!sectionExists) {
+            console.warn(`Question "${q.question_text?.substring(0, 30)}" has sectionId ${sectionId} but section doesn't exist`);
+            sectionId = null; // Clear invalid sectionId
+          }
+        }
+
         return {
           id: q.id.toString(),
           title: q.question_text,
@@ -812,8 +890,16 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
           conditionalLogic: q.conditional_logic || undefined,
           correctAnswer: q.correct_answer || undefined,
           points: q.points || 1,
+          sectionId: sectionId,
         };
       });
+      
+      // Debug: Log loaded questions with their sectionIds
+      console.log('Loaded questions with sectionIds:', mappedQuestions.map(q => ({
+        id: q.id,
+        title: q.title.substring(0, 30),
+        sectionId: q.sectionId
+      })));
 
       if (mappedQuestions.length > 0) {
         setQuestions(mappedQuestions);
@@ -838,15 +924,135 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
     }
   };
 
-  const addQuestion = () => {
+  const addQuestion = (sectionId?: string | null) => {
+    // If no sectionId provided but sections exist, assign to last section
+    let targetSectionId = sectionId;
+    if (!targetSectionId && sections.length > 0) {
+      targetSectionId = sections[sections.length - 1].id;
+    }
+    
     const newQuestion: Question = {
       id: Date.now().toString(),
       title: "",
       type: "short",
       required: false,
+      sectionId: targetSectionId || null,
     };
-    setQuestions([...questions, newQuestion]);
+    
+    // Always add new questions at the bottom of the section
+    if (targetSectionId) {
+      const sectionIndex = sections.findIndex(s => s.id === targetSectionId);
+      if (sectionIndex === -1) {
+        // Section not found, just add to end
+        setQuestions([...questions, newQuestion]);
+        setSelectedQuestionId(newQuestion.id);
+        return;
+      }
+      
+      // Find all questions that belong to this section (in order they appear in questions array)
+      const sectionQuestions = questions.filter(q => q.sectionId === targetSectionId);
+      
+      if (sectionQuestions.length > 0) {
+        // Section has questions - find the LAST question in this section and add after it (bottom)
+        const lastSectionQuestion = sectionQuestions[sectionQuestions.length - 1];
+        const lastIndex = questions.findIndex(q => q.id === lastSectionQuestion.id);
+        
+        // Add the new question right after the last question in this section
+        const newQuestions = [...questions];
+        newQuestions.splice(lastIndex + 1, 0, newQuestion);
+        setQuestions(newQuestions);
+      } else {
+        // Empty section - find where this section should appear
+        // We need to find where all questions for this section should go
+        // This is after all questions from previous sections, before questions from next sections
+        
+        // Start by finding the last question from previous sections
+        let insertIndex = -1;
+        
+        // Find the last question from all previous sections
+        for (let i = 0; i < sectionIndex; i++) {
+          const prevSection = sections[i];
+          const prevSectionQuestions = questions.filter(q => q.sectionId === prevSection.id);
+          if (prevSectionQuestions.length > 0) {
+            const lastPrevQuestion = prevSectionQuestions[prevSectionQuestions.length - 1];
+            const lastPrevIndex = questions.findIndex(q => q.id === lastPrevQuestion.id);
+            if (lastPrevIndex !== -1) {
+              insertIndex = Math.max(insertIndex, lastPrevIndex);
+            }
+          }
+        }
+        
+        // If no previous sections have questions, check if there are questions without section
+        // and if this is the first section, insert before them
+        if (insertIndex === -1 && sectionIndex === 0) {
+          const questionsWithoutSection = questions.filter(q => !q.sectionId);
+          if (questionsWithoutSection.length > 0) {
+            const firstNoSectionIndex = questions.findIndex(q => q.id === questionsWithoutSection[0].id);
+            if (firstNoSectionIndex !== -1) {
+              insertIndex = firstNoSectionIndex - 1;
+            }
+          }
+        }
+        
+        // If still no position found, check for next section's first question
+        if (insertIndex === -1) {
+          for (let i = sectionIndex + 1; i < sections.length; i++) {
+            const nextSection = sections[i];
+            const nextSectionQuestions = questions.filter(q => q.sectionId === nextSection.id);
+            if (nextSectionQuestions.length > 0) {
+              const firstNextQuestion = nextSectionQuestions[0];
+              const firstNextIndex = questions.findIndex(q => q.id === firstNextQuestion.id);
+              if (firstNextIndex !== -1) {
+                insertIndex = firstNextIndex - 1;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Insert at the calculated position (or at end if no position found)
+        const newQuestions = [...questions];
+        if (insertIndex === -1) {
+          // No position found, add at the end
+          newQuestions.push(newQuestion);
+        } else {
+          // Insert after the last question from previous sections
+          newQuestions.splice(insertIndex + 1, 0, newQuestion);
+        }
+        setQuestions(newQuestions);
+      }
+      
+      if (sections[sectionIndex]) {
+        toast({
+          title: "Question Added",
+          description: `Question added to "${sections[sectionIndex].title}"`,
+        });
+      }
+    } else {
+      // No section - add at the END of all questions without sections
+      const questionsWithoutSection = questions.filter(q => !q.sectionId);
+      if (questionsWithoutSection.length > 0) {
+        // Find the last question without section and add after it
+        const lastNoSectionQuestion = questionsWithoutSection[questionsWithoutSection.length - 1];
+        const lastNoSectionIndex = questions.findIndex(q => q.id === lastNoSectionQuestion.id);
+        const newQuestions = [...questions];
+        newQuestions.splice(lastNoSectionIndex + 1, 0, newQuestion);
+        setQuestions(newQuestions);
+      } else {
+        // No questions without sections, add to the very end
+        setQuestions([...questions, newQuestion]);
+      }
+    }
+    
     setSelectedQuestionId(newQuestion.id);
+    
+    // Scroll to the new question after a brief delay
+    setTimeout(() => {
+      const questionElement = document.querySelector(`[data-question-id="${newQuestion.id}"]`);
+      if (questionElement) {
+        questionElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
   };
 
   const addSection = () => {
@@ -855,21 +1061,76 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
       title: "Untitled Section",
       description: "",
     };
-    setSections([...sections, newSection]);
+    
+    // Insert section after current position if question is selected
+    let insertIndex = sections.length; // Default: add at end
+    
+    if (selectedQuestionId) {
+      const selectedQuestion = questions.find(q => q.id === selectedQuestionId);
+      if (selectedQuestion?.sectionId) {
+        // Find the section index and insert after it
+        const sectionIndex = sections.findIndex(s => s.id === selectedQuestion.sectionId);
+        if (sectionIndex !== -1) {
+          insertIndex = sectionIndex + 1;
+        }
+      }
+    }
+    
+    // Insert the new section at the calculated position
+    const newSections = [...sections];
+    newSections.splice(insertIndex, 0, newSection);
+    setSections(newSections);
+    
+    // Just create an empty section - don't assign existing questions
+    toast({
+      title: "Section Added",
+      description: "New section created. You can now add questions to this section.",
+    });
+    
+    // Scroll to the new section after a brief delay
+    setTimeout(() => {
+      const sectionElement = document.querySelector(`[data-section-id="${newSection.id}"]`);
+      if (sectionElement) {
+        sectionElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+  };
+
+  const updateSection = (id: string, updated: Partial<Section>) => {
+    setSections(
+      sections.map((s) => (s.id === id ? { ...s, ...updated } : s)),
+    );
+  };
+
+  const deleteSection = (id: string) => {
+    // Remove section from sections array
+    setSections(sections.filter((s) => s.id !== id));
+    // Remove sectionId from questions that belonged to this section
+    setQuestions(
+      questions.map((q) => (q.sectionId === id ? { ...q, sectionId: null } : q)),
+    );
   };
 
   const addTitleAndDescription = () => {
-    // This is essentially the form header, which already exists
-    // But we can scroll to it or highlight it
-    toast({
-      title: "Info",
-      description: "Form title and description are at the top of the form.",
-    });
+    // Scroll to form header
+    const formHeader = document.querySelector('[placeholder="Enter Form Title"]') as HTMLElement;
+    if (formHeader) {
+      formHeader.focus();
+      formHeader.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   };
 
   const updateQuestion = (id: string, updated: Partial<Question>) => {
+    // Normalize sectionId to string for consistency
+    const normalizedUpdate = { ...updated };
+    if ('sectionId' in normalizedUpdate) {
+      normalizedUpdate.sectionId = normalizedUpdate.sectionId 
+        ? String(normalizedUpdate.sectionId) 
+        : null;
+    }
+    
     setQuestions(
-      questions.map((q) => (q.id === id ? { ...q, ...updated } : q)),
+      questions.map((q) => (q.id === id ? { ...q, ...normalizedUpdate } : q)),
     );
   };
 
@@ -957,6 +1218,10 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
         accepting_responses: acceptingResponses,
         response_limit: responseLimit && responseLimit > 0 ? responseLimit : null,
         is_quiz: isQuiz,
+        email_notifications_enabled: emailNotificationsEnabled,
+        email_notification_recipients: emailNotificationRecipients.trim() || undefined,
+        send_confirmation_email: sendConfirmationEmail,
+        requires_login: requiresLogin,
         questions: questions.map((q) => {
           // Ensure rating and time questions carry markers in options
           let options = q.options ? [...q.options] : [];
@@ -988,9 +1253,26 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
             conditionalLogic: q.conditionalLogic || undefined,
             correctAnswer: q.correctAnswer || undefined,
             points: q.points || 1,
+            sectionId: q.sectionId || null,
           };
         }),
+        sections: (sections && Array.isArray(sections) && sections.length > 0) ? sections.map(s => ({
+          id: String(s.id), // Ensure ID is always a string
+          title: s.title || 'Untitled Section',
+          description: s.description || '',
+          conditionalNavigation: s.conditionalNavigation || undefined,
+        })) : [], // Always send sections array, even if empty
       };
+      
+      // Debug: Log what we're saving
+      console.log('=== SAVING FORM ===');
+      console.log('Current sections state:', sections);
+      console.log('Sections being sent:', formData.sections);
+      console.log('Questions being sent:', formData.questions.map(q => ({
+        title: q.title?.substring(0, 30),
+        sectionId: q.sectionId,
+        sectionIdType: typeof q.sectionId
+      })));
 
       const url = isEditMode ? `/api/forms/${currentFormId}` : '/api/forms';
       const method = isEditMode ? 'PUT' : 'POST';
@@ -1012,29 +1294,30 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
       const data: CreateFormResponse = await response.json();
       const fullShareUrl = `${window.location.origin}/form/${data.share_token}`;
       setShareUrl(fullShareUrl);
-      setShowSuccessDialog(true);
-
-      toast({
-        title: "Success",
-        description: `"${formTitle}" has been ${isEditMode ? 'updated' : 'saved'}.`,
-      });
+      
+      // Auto-copy the link to clipboard
+      try {
+        await navigator.clipboard.writeText(fullShareUrl);
+        toast({
+          title: "Form Saved!",
+          description: `"${formTitle}" has been ${isEditMode ? 'updated' : 'saved'} and link copied to clipboard.`,
+        });
+      } catch (err) {
+        // Fallback if clipboard API fails
+        toast({
+          title: "Form Saved!",
+          description: `"${formTitle}" has been ${isEditMode ? 'updated' : 'saved'}.`,
+        });
+      }
       
       // Clear draft from localStorage after successful save
       clearDraftFromLocalStorage();
-
-      // If it's a new form, update the URL to include formId for edit mode
-      // This allows the user to continue editing without losing their work
-      if (!isEditMode && data.id) {
-        // Update URL without navigation to preserve current state
-        window.history.replaceState({}, '', `/create?edit=${data.id}`);
-        // Reload form data to get submission count and enable responses tab
-        setTimeout(() => {
-          loadFormData();
-        }, 500);
-      }
       
       // Trigger a custom event to refresh the forms list
       window.dispatchEvent(new CustomEvent('formCreated'));
+      
+      // Navigate to home page
+      navigate("/");
     } catch (error) {
       toast({
         title: "Error",
@@ -1068,6 +1351,9 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
         title: formTitle,
         description: formDescription,
         questions,
+        sections,
+        formId: currentFormId, // Preserve formId for navigation back
+        editMode: !!currentFormId, // Indicate if we're editing an existing form
       },
     });
   };
@@ -1124,7 +1410,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
           <Loader2 className="h-8 w-8 animate-spin text-gray-600" />
         </div>
       ) : (
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-4xl mx-auto relative">
         {/* Navigation Tabs - Google Forms Style */}
         <div className="border-b border-gray-300 bg-white -mx-6 px-6">
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "questions" | "responses" | "settings")} className="w-full">
@@ -1155,7 +1441,68 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
             </TabsList>
 
             {/* Questions Tab Content */}
-            <TabsContent value="questions" className="mt-6 px-6 pb-8">
+            <TabsContent value="questions" className="mt-6 px-6 pb-8 relative">
+              {/* Sidebar Toolbar - Google Forms Style (Fixed - For general use) */}
+              <div className="absolute -right-14 top-0 z-50">
+                <div className="bg-white rounded-lg shadow-md border border-gray-300 p-1.5 flex flex-col gap-0.5">
+                  {/* Add Question (without section) */}
+                  <button
+                    type="button"
+                    onClick={() => addQuestion(null)}
+                    className="p-2.5 rounded-md hover:bg-gray-100 transition-colors group relative"
+                    title="Add question"
+                  >
+                    <Plus className="w-5 h-5 text-gray-600 group-hover:text-primary" />
+                  </button>
+                  
+                  {/* Add Section */}
+                  <button
+                    type="button"
+                    onClick={addSection}
+                    className="p-2.5 rounded-md hover:bg-gray-100 transition-colors group relative"
+                    title="Add section"
+                  >
+                    <div className="w-5 h-5 flex flex-col justify-center items-center gap-0.5">
+                      <div className="w-full h-[2px] bg-gray-600 group-hover:bg-primary rounded transition-colors"></div>
+                      <div className="w-full h-[2px] bg-gray-600 group-hover:bg-primary rounded transition-colors"></div>
+                    </div>
+                  </button>
+                  
+                  {/* Divider */}
+                  <div className="h-px bg-gray-200 my-0.5 mx-1"></div>
+                  
+                  {/* Add Text */}
+                  <button
+                    type="button"
+                    onClick={addTitleAndDescription}
+                    className="p-2.5 rounded-md hover:bg-gray-100 transition-colors group relative"
+                    title="Add title and description"
+                  >
+                    <Type className="w-5 h-5 text-gray-600 group-hover:text-primary" />
+                  </button>
+                  
+                  {/* Placeholder for Image */}
+                  <button
+                    type="button"
+                    disabled
+                    className="p-2.5 rounded-md hover:bg-gray-100 transition-colors group relative opacity-50 cursor-not-allowed"
+                    title="Add image (coming soon)"
+                  >
+                    <Image className="w-5 h-5 text-gray-600" />
+                  </button>
+                  
+                  {/* Placeholder for Video */}
+                  <button
+                    type="button"
+                    disabled
+                    className="p-2.5 rounded-md hover:bg-gray-100 transition-colors group relative opacity-50 cursor-not-allowed"
+                    title="Add video (coming soon)"
+                  >
+                    <Video className="w-5 h-5 text-gray-600" />
+                  </button>
+                </div>
+              </div>
+
               {/* Form Header Section */}
               <div className="bg-gradient-to-br from-purple-100 to-purple-50 rounded-lg p-8 mb-8 border border-purple-200">
                 <input
@@ -1174,30 +1521,263 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
                 />
               </div>
 
-              {/* Questions Section */}
-              <div className="space-y-6 relative">
-                {questions.map((question, index) => (
+              {/* Questions Section - Grouped by sections */}
+              <div className="space-y-8 relative">
+                {(() => {
+                  // Group questions by section
+                  const questionsBySection = new Map<string, Question[]>();
+                  const questionsWithoutSection: Question[] = [];
+                  
+                  // Debug: Log sections and questions
+                  console.log('Rendering - Sections:', sections.map(s => ({ id: String(s.id), title: s.title })));
+                  console.log('Rendering - Questions with sectionIds:', questions.map(q => ({
+                    id: q.id,
+                    title: q.title?.substring(0, 30),
+                    sectionId: q.sectionId,
+                    sectionIdType: typeof q.sectionId
+                  })));
+                  
+                  // Create a set of valid section IDs for quick lookup
+                  const validSectionIds = new Set(sections.map(s => String(s.id)));
+                  
+                  questions.forEach((q) => {
+                    if (q.sectionId) {
+                      // Normalize sectionId to string for matching
+                      const normalizedSectionId = String(q.sectionId);
+                      
+                      // Verify section exists
+                      if (!validSectionIds.has(normalizedSectionId)) {
+                        console.warn(`Question "${q.title?.substring(0, 30)}" has sectionId "${normalizedSectionId}" but section doesn't exist. Available sections:`, Array.from(validSectionIds));
+                        questionsWithoutSection.push(q);
+                        return;
+                      }
+                      
+                      const sectionQuestions = questionsBySection.get(normalizedSectionId) || [];
+                      sectionQuestions.push(q);
+                      questionsBySection.set(normalizedSectionId, sectionQuestions);
+                    } else {
+                      questionsWithoutSection.push(q);
+                    }
+                  });
+
+                  // Sort sections by display order (maintain order they were added)
+                  const sortedSections = [...sections];
+                  
+                  // Ensure all sections have an entry in the map (even if empty)
+                  // Normalize section IDs to strings for matching
+                  sortedSections.forEach((section) => {
+                    const normalizedSectionId = String(section.id);
+                    if (!questionsBySection.has(normalizedSectionId)) {
+                      questionsBySection.set(normalizedSectionId, []);
+                    }
+                  });
+                  
+                  const result: JSX.Element[] = [];
+                  let questionIndex = 0;
+
+                  // Render sections with their questions
+                  sortedSections.forEach((section) => {
+                    // Normalize section ID for matching
+                    const normalizedSectionId = String(section.id);
+                    const sectionQuestions = questionsBySection.get(normalizedSectionId) || [];
+                    
+                    // Debug: Log if section has questions
+                    if (sectionQuestions.length > 0) {
+                      console.log(`Section "${section.title}" has ${sectionQuestions.length} questions`);
+                    } else {
+                      console.log(`Section "${section.title}" is empty`);
+                    }
+
+                    const sectionIndex = sortedSections.findIndex(s => s.id === section.id);
+                    const sectionNumber = sectionIndex + 1;
+                    const totalSections = sortedSections.length;
+
+                    result.push(
+                      <div key={`section-${section.id}`} data-section-id={section.id} className="space-y-4 mb-8">
+                        {/* Google Forms Style Section Banner */}
+                        <div className="bg-orange-500 text-white px-4 py-2 rounded-t-lg font-medium text-sm">
+                          Section {sectionNumber} of {totalSections}
+                        </div>
+                        
+                        {/* Section Header Box */}
+                        <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-b-lg border-2 border-t-0 border-orange-200 p-4 shadow-sm">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1">
+                              <input
+                                type="text"
+                                value={section.title}
+                                onChange={(e) => updateSection(section.id, { title: e.target.value })}
+                                className="text-xl font-semibold text-gray-900 bg-transparent border-none outline-none w-full placeholder-gray-400 mb-2"
+                                placeholder="Untitled Section"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <textarea
+                                value={section.description || ""}
+                                onChange={(e) => updateSection(section.id, { description: e.target.value })}
+                                className="text-sm text-gray-600 bg-transparent border-none outline-none w-full resize-none placeholder-gray-400"
+                                placeholder="Section description (optional)"
+                                rows={1}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              {sectionQuestions.length === 0 && (
+                                <p className="text-xs text-gray-500 mt-2 italic">
+                                  This section is empty. Add questions to this section using the "Section" dropdown in each question.
+                                </p>
+                              )}
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteSection(section.id);
+                              }}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        
+                        {/* Section Navigation Hint (Google Forms Style) */}
+                        {sectionIndex < sortedSections.length - 1 && (
+                          <div className="text-sm text-gray-600 py-2 px-4 bg-gray-50 rounded border border-gray-200">
+                            After section {sectionNumber} <span className="font-medium">Continue to next section</span>
+                            <ChevronRight className="w-4 h-4 inline-block ml-1" />
+                          </div>
+                        )}
+
+                        {/* Section Questions */}
+                        {sectionQuestions.map((question) => {
+                          const globalIndex = questions.findIndex((q) => q.id === question.id);
+                          return (
                   <div
                     key={question.id}
+                              data-question-id={question.id}
                     onClick={() => setSelectedQuestionId(question.id)}
                     className={selectedQuestionId === question.id ? "ring-2 ring-blue-500 rounded-lg" : ""}
                   >
                     <QuestionBuilder
                       question={question}
                       allQuestions={questions}
+                                sections={sections}
                       isQuizMode={isQuiz}
                       onUpdate={updateQuestion}
                       onDelete={deleteQuestion}
                       onDuplicate={duplicateQuestion}
                       onMove={moveQuestion}
-                      canMoveUp={index > 0}
-                      canMoveDown={index < questions.length - 1}
+                                canMoveUp={globalIndex > 0}
+                                canMoveDown={globalIndex < questions.length - 1}
                       isSelected={selectedQuestionId === question.id}
-                      isLastQuestion={index === questions.length - 1}
-                      onAddQuestion={addQuestion}
+                                isLastQuestion={globalIndex === questions.length - 1}
+                                onAddQuestion={() => addQuestion(section.id)}
                     />
                   </div>
-                ))}
+                          );
+                        })}
+                        
+                        {/* Contextual Toolbar - Google Forms Style (Below Section) */}
+                        <div className="flex items-center justify-center py-3 gap-2 bg-gray-50 rounded-lg border border-gray-200">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              addQuestion(section.id);
+                            }}
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2 shadow-sm hover:shadow"
+                            title="Add question to this section"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add question
+                          </button>
+                          
+                          <div className="h-6 w-px bg-gray-300"></div>
+                          
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const currentIndex = sortedSections.findIndex(s => s.id === section.id);
+                              const newSection: Section = {
+                                id: Date.now().toString(),
+                                title: "Untitled Section",
+                                description: "",
+                              };
+                              const newSections = [...sections];
+                              newSections.splice(currentIndex + 1, 0, newSection);
+                              setSections(newSections);
+                              
+                              toast({
+                                title: "Section Added",
+                                description: "New section created after this section.",
+                              });
+                              
+                              setTimeout(() => {
+                                const sectionElement = document.querySelector(`[data-section-id="${newSection.id}"]`);
+                                if (sectionElement) {
+                                  sectionElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }
+                              }, 100);
+                            }}
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
+                            title="Add section after this section"
+                          >
+                            <div className="w-4 h-4 flex flex-col justify-center items-center gap-0.5">
+                              <div className="w-full h-[2px] bg-gray-600 rounded"></div>
+                              <div className="w-full h-[2px] bg-gray-600 rounded"></div>
+                            </div>
+                            Add section
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  });
+
+                  // Render questions without a section
+                  questionsWithoutSection.forEach((question) => {
+                    const globalIndex = questions.findIndex((q) => q.id === question.id);
+                    result.push(
+                            <div
+                              key={question.id}
+                              data-question-id={question.id}
+                              onClick={() => setSelectedQuestionId(question.id)}
+                              className={selectedQuestionId === question.id ? "ring-2 ring-blue-500 rounded-lg" : ""}
+                            >
+                        <QuestionBuilder
+                          question={question}
+                          allQuestions={questions}
+                          sections={sections}
+                          isQuizMode={isQuiz}
+                          onUpdate={updateQuestion}
+                          onDelete={deleteQuestion}
+                          onDuplicate={duplicateQuestion}
+                          onMove={moveQuestion}
+                          canMoveUp={globalIndex > 0}
+                          canMoveDown={globalIndex < questions.length - 1}
+                          isSelected={selectedQuestionId === question.id}
+                          isLastQuestion={globalIndex === questions.length - 1}
+                          onAddQuestion={() => addQuestion(null)}
+                        />
+                      </div>
+                    );
+                  });
+
+                  // If no questions at all, show empty state
+                  if (result.length === 0) {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                        <FileQuestion className="w-12 h-12 text-gray-400 mb-4" />
+                        <p className="text-gray-600 mb-4">No questions yet. Add your first question!</p>
+                        <Button onClick={() => addQuestion(null)} variant="outline">
+                          <Plus className="w-4 h-4 mr-2" />
+                          Add Question
+                        </Button>
+                      </div>
+                    );
+                  }
+
+                  return result;
+                })()}
               </div>
             </TabsContent>
 
@@ -1319,6 +1899,83 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
                         Clear
                       </Button>
                     )}
+                  </div>
+                </div>
+
+                {/* Email Notifications Section */}
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex-1">
+                      <Label htmlFor="email-notifications" className="block text-sm font-semibold text-gray-700 mb-1">
+                        Email Notifications
+                      </Label>
+                      <p className="text-xs text-gray-500">
+                        Receive email notifications when someone submits this form.
+                      </p>
+                    </div>
+                    <Switch
+                      id="email-notifications"
+                      checked={emailNotificationsEnabled}
+                      onCheckedChange={setEmailNotificationsEnabled}
+                    />
+                  </div>
+                  
+                  {emailNotificationsEnabled && (
+                    <div className="mt-4 space-y-4">
+                      <div>
+                        <Label htmlFor="email-recipients" className="block text-sm font-medium text-gray-700 mb-2">
+                          Notification Recipients
+                        </Label>
+                        <p className="text-xs text-gray-500 mb-2">
+                          Enter email addresses (comma-separated) who should receive notifications when forms are submitted.
+                        </p>
+                        <Input
+                          id="email-recipients"
+                          type="text"
+                          value={emailNotificationRecipients}
+                          onChange={(e) => setEmailNotificationRecipients(e.target.value)}
+                          placeholder="email1@example.com, email2@example.com"
+                          className="w-full"
+                        />
+                      </div>
+                      
+                      <div className="flex items-center justify-between pt-2">
+                        <div className="flex-1">
+                          <Label htmlFor="send-confirmation" className="block text-sm font-medium text-gray-700 mb-1">
+                            Send Confirmation Email to Submitter
+                          </Label>
+                          <p className="text-xs text-gray-500">
+                            Automatically send a confirmation email to the submitter (requires email field in form).
+                          </p>
+                        </div>
+                        <Switch
+                          id="send-confirmation"
+                          checked={sendConfirmationEmail}
+                          onCheckedChange={setSendConfirmationEmail}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Require Login Section */}
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <Label htmlFor="requires-login" className="block text-sm font-semibold text-gray-700 mb-1">
+                        Require Login
+                      </Label>
+                      <p className="text-xs text-gray-500">
+                        {requiresLogin 
+                          ? "Users must log in to view and submit this form"
+                          : "Anyone with the link can view and submit without logging in"}
+                      </p>
+                    </div>
+                    <Switch
+                      id="requires-login"
+                      checked={requiresLogin}
+                      onCheckedChange={setRequiresLogin}
+                    />
                   </div>
                 </div>
 

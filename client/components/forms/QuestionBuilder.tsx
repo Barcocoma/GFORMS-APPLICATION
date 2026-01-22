@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { X, Copy, ChevronDown, ChevronUp, ChevronDown as MoveDown, GripVertical, Image, Star, Clock, Calendar, Upload, Grid3x3, Heart, ThumbsUp, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Question } from "./FormEditor";
+import { Question, Section } from "./FormEditor";
 
 interface QuestionBuilderProps {
   question: Question;
   allQuestions?: Question[]; // All questions in the form for conditional logic
+  sections?: Section[]; // All sections in the form
   isQuizMode?: boolean; // Whether quiz mode is enabled for the form
   onUpdate: (id: string, updated: Partial<Question>) => void;
   onDelete: (id: string) => void;
@@ -36,6 +37,7 @@ const QUESTION_TYPES = [
 export function QuestionBuilder({
   question,
   allQuestions = [],
+  sections = [],
   isQuizMode = false,
   onUpdate,
   onDelete,
@@ -240,6 +242,27 @@ export function QuestionBuilder({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+          
+          {/* Section Assignment */}
+          {sections && sections.length > 0 && (
+            <div className="bg-gray-50 rounded p-2 border border-gray-200">
+              <div className="text-xs font-semibold text-gray-600 mb-1.5">Section</div>
+              <select
+                value={question.sectionId || ''}
+                onChange={(e) => onUpdate(question.id, {
+                  sectionId: e.target.value || null
+                })}
+                className="w-full px-1.5 py-0.5 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                <option value="">No Section</option>
+                {sections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.title}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           
