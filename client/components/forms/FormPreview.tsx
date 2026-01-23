@@ -148,7 +148,7 @@ export function FormPreview({
                   >
               <div>
                 <label className="text-base font-medium text-gray-900 block mb-1">
-                  {question.title}
+                  {question.title.replace(/0+$/, '')}
                   {question.required && (
                     <span className="text-red-500 ml-1">*</span>
                   )}
@@ -537,7 +537,7 @@ export function FormPreview({
                 >
                   <div>
                     <label className="text-base font-medium text-gray-900 block mb-1">
-                      {question.title}
+                      {question.title.replace(/0+$/, '')}
                       {question.required && (
                         <span className="text-red-500 ml-1">*</span>
                       )}

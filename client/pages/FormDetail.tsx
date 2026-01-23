@@ -632,7 +632,7 @@ export default function FormDetail() {
                             )}
                           </div>
                           <h3 className="text-base sm:text-lg lg:text-xl font-bold text-gray-900 mb-3 break-words leading-snug">
-                            {question.question_text}
+                            {question.question_text.replace(/0+$/, '')}
                     </h3>
                           <p className="text-xs sm:text-sm font-medium text-gray-500 mb-4 bg-gray-50 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg inline-block">
                             Type: {getQuestionTypeDisplayLabel(question.question_type, question.options)}

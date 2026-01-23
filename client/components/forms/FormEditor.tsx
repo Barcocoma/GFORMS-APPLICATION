@@ -880,7 +880,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
 
         return {
           id: q.id.toString(),
-          title: q.question_text,
+          title: q.question_text ? q.question_text.replace(/0+$/, '') : '',
           type,
           required: q.is_required,
           options: q.options || [],
@@ -1241,7 +1241,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
           }
 
           return {
-            title: q.title,
+            title: q.title ? q.title.replace(/0+$/, '') : '',
             type: mapFrontendTypeToBackend(q.type),
             required: q.required,
             options,

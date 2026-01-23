@@ -13,7 +13,9 @@ import {
   LogOut,
   UserCircle,
   CheckCheck,
-  Search
+  Search,
+  Users,
+  ClipboardList
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -56,6 +58,21 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       title: "Admin Dashboard",
       href: "/admin",
       icon: LayoutDashboard,
+    },
+    {
+      title: "Manage Users",
+      href: "/admin/users",
+      icon: Users,
+    },
+    {
+      title: "Manage Forms",
+      href: "/admin/forms",
+      icon: FileText,
+    },
+    {
+      title: "View Submissions",
+      href: "/admin/submissions",
+      icon: ClipboardList,
     },
     {
       title: "Go to Forms",
@@ -530,8 +547,9 @@ export function AdminLayout({ children }: AdminLayoutProps) {
             <div className={cn("space-y-1", isSidebarMinimized && "space-y-1.5")}>
               {navItems.map((item) => {
                 const Icon = item.icon;
+                // Determine active state: exact match or starts with for admin routes
                 const isActive = location.pathname === item.href || 
-                  (item.href === "/admin" && location.pathname.startsWith("/admin")) ||
+                  (item.href === "/admin" && location.pathname === "/admin") ||
                   (item.href === "/" && location.pathname === "/") ||
                   (item.href !== "/admin" && item.href !== "/" && location.pathname.startsWith(item.href));
                 

@@ -236,8 +236,8 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
       'date': 'Date',
       'time': 'Time',
       'file': 'File Upload',
-      'multiple_grid': 'Multiple Choice Grid',
-      'checkbox_grid': 'Checkbox Grid'
+      'multiple_grid': 'Multiple Choice',
+      'checkbox_grid': 'Checkboxes'
     };
     return typeLabels[type] || 'Unknown';
   };
@@ -482,7 +482,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
                         <div className="flex items-center gap-2 mb-2 flex-wrap">
                           <span className="text-sm font-medium text-gray-500 shrink-0">Q{index + 1}</span>
                           <h4 className="text-base font-semibold text-gray-900 break-words">
-                            {summary.question.title}
+                            {summary.question.title.replace(/0+$/, '')}
                           </h4>
                           <Badge variant="outline" className="text-xs shrink-0">
                             {getQuestionTypeLabel(summary.question.type)}
@@ -558,7 +558,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
                         className="px-3 sm:px-4 lg:px-6 py-3 text-left text-xs sm:text-sm font-semibold text-gray-900 min-w-[120px]"
                   >
                         <div className="space-y-1">
-                          <span className="line-clamp-2 block break-words">{question.title}</span>
+                          <span className="line-clamp-2 block break-words">{question.title.replace(/0+$/, '')}</span>
                           <Badge variant="outline" className="text-xs shrink-0">
                             {getQuestionTypeLabel(question.type)}
                           </Badge>
@@ -636,11 +636,26 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
                         <p className="text-sm font-semibold text-gray-900 break-words">
                           Response #{responseIndex + 1}
                         </p>
-                        {isQuiz && response.total_score !== undefined && response.total_score !== null && (
+                        {isQuiz && response.quiz_results && (
                           <Badge className="bg-blue-100 text-blue-700 font-semibold flex items-center gap-1 shrink-0">
                             <Award className="w-3 h-3 shrink-0" />
                             <span className="whitespace-nowrap">
-                              Total: {typeof response.total_score === 'number' ? Math.round(response.total_score) : Math.round(parseFloat(response.total_score || '0'))}
+                              Total: {(() => {
+                                // If total_score is null/undefined, use auto score
+                                if (response.total_score === undefined || response.total_score === null) {
+                                  return response.quiz_results.earned_points;
+                                }
+                                // If total_score is 0 and no manual scores, use auto score
+                                const hasManualScores = response.manual_scores && Object.keys(response.manual_scores).length > 0;
+                                const totalScore = typeof response.total_score === 'number' 
+                                  ? response.total_score 
+                                  : parseFloat(response.total_score || '0');
+                                if (totalScore === 0 && !hasManualScores) {
+                                  return response.quiz_results.earned_points;
+                                }
+                                // Otherwise use total_score
+                                return Math.round(totalScore);
+                              })()}
                               {response.quiz_results && (
                                 <span className="text-xs ml-1 font-normal">
                                   / {response.quiz_results.total_points}
@@ -677,7 +692,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
                         <div key={question.id} className="border-l-2 border-primary/20 pl-3 py-1">
                           <div className="flex items-start gap-2 mb-1 flex-wrap">
                             <p className="text-xs font-semibold text-gray-900 break-words flex-1 min-w-0">
-                              Q{qIndex + 1}: {question.title}
+                              Q{qIndex + 1}: {question.title.replace(/0+$/, '')}
                             </p>
                             <Badge variant="outline" className="text-[10px] shrink-0">
                               {getQuestionTypeLabel(question.type)}
@@ -727,7 +742,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
               return (
                 <div key={question.id} className="space-y-2">
                   <label className="text-sm font-semibold text-gray-900">
-                    {question.title}
+                    {question.title.replace(/0+$/, '')}
                     {question.required && <span className="text-red-500 ml-1">*</span>}
                   </label>
                   {question.type === 'long' ? (
@@ -818,10 +833,25 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
           <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center justify-between flex-wrap gap-2">
               <span className="break-words">View Response</span>
-              {isQuiz && viewingResponse?.total_score !== undefined && viewingResponse?.total_score !== null && (
+              {isQuiz && viewingResponse?.quiz_results && (
                 <Badge className="bg-blue-100 text-blue-700 font-semibold text-sm sm:text-base px-2 sm:px-3 py-1 shrink-0">
                   <Award className="w-4 h-4 mr-1 inline" />
-                  {typeof viewingResponse.total_score === 'number' ? Math.round(viewingResponse.total_score) : Math.round(parseFloat(viewingResponse.total_score || '0'))}
+                  {(() => {
+                    // If total_score is null/undefined, use auto score
+                    if (viewingResponse.total_score === undefined || viewingResponse.total_score === null) {
+                      return viewingResponse.quiz_results.earned_points;
+                    }
+                    // If total_score is 0 and no manual scores, use auto score
+                    const hasManualScores = viewingResponse.manual_scores && Object.keys(viewingResponse.manual_scores).length > 0;
+                    const totalScore = typeof viewingResponse.total_score === 'number' 
+                      ? viewingResponse.total_score 
+                      : parseFloat(viewingResponse.total_score || '0');
+                    if (totalScore === 0 && !hasManualScores) {
+                      return viewingResponse.quiz_results.earned_points;
+                    }
+                    // Otherwise use total_score
+                    return Math.round(totalScore);
+                  })()}
                   {viewingResponse.quiz_results && (
                     <span className="ml-1 font-normal">/ {viewingResponse.quiz_results.total_points}</span>
                   )}
@@ -845,10 +875,22 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
                         )}
                       </div>
                       <div className="text-xs text-gray-600">
-                        = Total: {viewingResponse.total_score !== undefined && viewingResponse.total_score !== null 
-                          ? (typeof viewingResponse.total_score === 'number' ? Math.round(viewingResponse.total_score) : Math.round(parseFloat(viewingResponse.total_score || '0')))
-                          : viewingResponse.quiz_results.earned_points
-                        }/{viewingResponse.quiz_results.total_points} points
+                        = Total: {(() => {
+                          // If total_score is null/undefined, use auto score
+                          if (viewingResponse.total_score === undefined || viewingResponse.total_score === null) {
+                            return viewingResponse.quiz_results.earned_points;
+                          }
+                          // If total_score is 0 and no manual scores, use auto score
+                          const hasManualScores = viewingResponse.manual_scores && Object.keys(viewingResponse.manual_scores).length > 0;
+                          const totalScore = typeof viewingResponse.total_score === 'number' 
+                            ? viewingResponse.total_score 
+                            : parseFloat(viewingResponse.total_score || '0');
+                          if (totalScore === 0 && !hasManualScores) {
+                            return viewingResponse.quiz_results.earned_points;
+                          }
+                          // Otherwise use total_score
+                          return Math.round(totalScore);
+                        })()}/{viewingResponse.quiz_results.total_points} points
                       </div>
                     </div>
                   )}
@@ -875,7 +917,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap mb-2">
                         <span className="text-sm font-semibold text-gray-900">
-                          Q{qIndex + 1}: {question.title}
+                          Q{qIndex + 1}: {question.title.replace(/0+$/, '').trim().replace(/0+$/, '')}
                         </span>
                         <Badge variant="outline" className="text-xs">
                           {getQuestionTypeLabel(question.type)}

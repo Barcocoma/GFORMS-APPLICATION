@@ -576,17 +576,14 @@ export default function Index() {
         {/* Empty state hint */}
         {forms.length === 0 && !isLoading && (
           <div className="text-center py-16">
-            <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 mb-6">
-              <Plus className="w-10 h-10 text-primary" />
-              </div>
-            <h3 className="text-2xl font-bold text-gray-900 mb-2">
+            <h3 className="text-2xl font-bold text-white mb-2">
               No forms yet
                   </h3>
-            <p className="text-gray-600 text-lg mb-6 max-w-md mx-auto">
+            <p className="text-slate-200 text-lg mb-6 max-w-md mx-auto">
               Get started by creating your first form to collect responses
             </p>
             <Link to="/create">
-              <Button className="bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white gap-2 shadow-md hover:shadow-lg transition-all duration-200">
+              <Button className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white gap-2 shadow-md hover:shadow-lg transition-all duration-200">
                 <Plus className="w-5 h-5" />
                 Create Your First Form
               </Button>

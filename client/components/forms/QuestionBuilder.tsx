@@ -25,11 +25,8 @@ const QUESTION_TYPES = [
   { value: "multiple", label: "Multiple choice", icon: "radio" },
   { value: "checkbox", label: "Checkboxes", icon: "checkbox" },
   { value: "dropdown", label: "Drop-down", icon: "dropdown" },
-  { value: "file", label: "File upload", icon: "upload" },
   { value: "linear", label: "Linear scale", icon: "scale" },
   { value: "rating", label: "Rating", icon: "star" },
-  { value: "multiple_grid", label: "Multiple-choice grid", icon: "grid" },
-  { value: "checkbox_grid", label: "Tick box grid", icon: "grid" },
   { value: "date", label: "Date", icon: "calendar" },
   { value: "time", label: "Time", icon: "clock" },
 ];
@@ -125,8 +122,11 @@ export function QuestionBuilder({
           <div className="flex-1 space-y-2">
             <input
               type="text"
-              value={question.title}
-              onChange={(e) => onUpdate(question.id, { title: e.target.value })}
+              value={question.title ? question.title.replace(/0+$/, '') : ''}
+              onChange={(e) => {
+                const cleanedValue = e.target.value.replace(/0+$/, '');
+                onUpdate(question.id, { title: cleanedValue });
+              }}
               className="w-full text-lg font-medium text-gray-900 bg-transparent border-b-2 border-transparent hover:border-gray-300 focus:border-primary outline-none pb-2"
               placeholder="Question"
             />

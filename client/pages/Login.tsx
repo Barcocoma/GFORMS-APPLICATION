@@ -22,15 +22,17 @@ export default function Login() {
 
   // Redirect if already authenticated
   useEffect(() => {
-    if (!authLoading && isAuthenticated) {
+    if (!authLoading && isAuthenticated && user) {
       // If there's a 'from' path, redirect there, otherwise use role-based redirect
+      // Admin users always go to dashboard, regular users go to forms page
       if (from) {
         navigate(from, { replace: true });
       } else {
-        navigate(user?.role === 'admin' ? '/admin' : '/', { replace: true });
+        const redirectPath = user.role === 'admin' ? '/admin' : '/';
+        navigate(redirectPath, { replace: true });
       }
     }
-  }, [isAuthenticated, authLoading, navigate, user?.role, from]);
+  }, [isAuthenticated, authLoading, navigate, user, from]);
 
   if (authLoading) {
     return (
@@ -50,7 +52,8 @@ export default function Login() {
 
     try {
       await login({ username, password });
-      // Role-based redirect happens in the useEffect above once user is set
+      // Redirect immediately after successful login
+      // The useEffect will handle the redirect once user state is updated
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.');
     } finally {

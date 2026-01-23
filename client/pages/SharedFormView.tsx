@@ -91,6 +91,12 @@ export default function SharedFormView() {
   const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0); // Current section being displayed
   const [sections, setSections] = useState<FormSection[]>([]); // All sections in the form
 
+  // Helper function to remove trailing "0" from question_text
+  const cleanQuestionText = (text: string | undefined | null): string => {
+    if (!text || typeof text !== 'string') return '';
+    return text.replace(/0+$/, '');
+  };
+
   useEffect(() => {
     if (shareToken) {
       fetchForm();
@@ -125,7 +131,32 @@ export default function SharedFormView() {
       }
 
       const data = await response.json();
-      setForm(data);
+      
+      // Clean trailing "0" from all question_text - remove ALL trailing zeros IMMEDIATELY
+      const cleanedQuestions = (data.questions || []).map((q: FormQuestion) => {
+        let text = (q.question_text || '').trim();
+        // Remove ALL trailing zeros (keep removing until none left)
+        while (text.endsWith('0')) {
+          text = text.slice(0, -1).trim();
+        }
+        return {
+          ...q,
+          question_text: text
+        };
+      });
+      
+      // Set the cleaned form data with cleaned questions
+      const cleanedForm = {
+        ...data,
+        questions: cleanedQuestions
+      };
+      
+      console.log('[FORM LOADED] Questions after cleaning:', cleanedQuestions.map(q => ({
+        id: q.id,
+        text: q.question_text
+      })));
+      
+      setForm(cleanedForm);
       
       // If form requires login and user is not authenticated, redirect to login
       // Check explicitly: requires_login must be explicitly false (or 0) to allow public access
@@ -420,20 +451,26 @@ export default function SharedFormView() {
     console.log('getCurrentSectionQuestions - hasQuestionsWithoutSection:', hasQuestionsWithoutSection);
     console.log('getCurrentSectionQuestions - form.questions:', form.questions.map(q => ({
       id: q.id,
-      text: q.question_text?.substring(0, 30),
+      text: cleanQuestionText(q.question_text)?.substring(0, 30),
       sectionId: q.sectionId
     })));
     
-    // If no sections, show all questions
+    // If no sections, show all questions (with cleaned question_text)
     if (sections.length === 0) {
       console.log('No sections - showing all questions');
-      return form.questions.filter(q => shouldShowQuestion(q));
+      return form.questions.filter(q => shouldShowQuestion(q)).map(q => ({
+        ...q,
+        question_text: cleanQuestionText(q.question_text)
+      }));
     }
     
     // If currentSectionIndex is -1, show questions without section
     if (currentSectionIndex === -1) {
       console.log('Showing questions without section');
-      return questionsWithoutSection;
+      return questionsWithoutSection.map(q => ({
+        ...q,
+        question_text: cleanQuestionText(q.question_text)
+      }));
     }
     
     // Sections exist - show questions from current section
@@ -453,24 +490,32 @@ export default function SharedFormView() {
     // Normalize section ID to string for consistent comparison
     const currentSectionId = String(currentSection.id);
     
-    // Filter questions that belong to current section only
+    // Filter questions that belong to current section only and clean question_text
     const sectionQuestions = form.questions.filter(q => {
       if (!shouldShowQuestion(q)) {
-        console.log(`Question "${q.question_text?.substring(0, 30)}" filtered out by shouldShowQuestion`);
+        console.log(`Question "${cleanQuestionText(q.question_text)?.substring(0, 30)}" filtered out by shouldShowQuestion`);
         return false;
       }
       
       // Exclude questions without section when showing a section
       if (!q.sectionId) {
-        console.log(`Question "${q.question_text?.substring(0, 30)}" has no sectionId - excluding`);
+        console.log(`Question "${cleanQuestionText(q.question_text)?.substring(0, 30)}" has no sectionId - excluding`);
         return false;
       }
       
       // Normalize and compare section IDs
       const qSectionId = String(q.sectionId);
       const matches = qSectionId === currentSectionId;
-      console.log(`Question "${q.question_text?.substring(0, 30)}" (ID: ${q.id}) sectionId: ${qSectionId}, currentSectionId: ${currentSectionId}, matches: ${matches}`);
+      const cleanedText = cleanQuestionText(q.question_text);
+      console.log(`Question "${cleanedText?.substring(0, 30)}" (ID: ${q.id}) sectionId: ${qSectionId}, currentSectionId: ${currentSectionId}, matches: ${matches}`);
       return matches;
+    }).map(q => {
+      const cleaned = cleanQuestionText(q.question_text);
+      console.log(`[GET QUESTIONS] Cleaning question ${q.id}: "${q.question_text}" -> "${cleaned}"`);
+      return {
+        ...q,
+        question_text: cleaned
+      };
     });
     
     console.log(`Found ${sectionQuestions.length} questions for current section (index ${sectionIndex})`);
@@ -1003,7 +1048,7 @@ export default function SharedFormView() {
                           >
                             <div className="flex items-start justify-between mb-2">
                               <div className="font-medium text-gray-900 flex-1">
-                                {question.question_text}
+                                {question.question_text || ''}
                               </div>
                               <div className={`ml-3 font-bold ${
                                 result.is_correct ? 'text-green-600' : 'text-red-600'
@@ -1198,7 +1243,7 @@ export default function SharedFormView() {
                     <div className="space-y-1 flex-1">
                       <Label htmlFor={`q${question.id}`} className="text-base font-semibold text-gray-900 flex items-center gap-2">
                         <span className="text-primary font-bold">Q{currentQuestion}:</span>
-                        {question.question_text}
+                        {question.question_text ? question.question_text.replace(/0+$/, '') : ''}
                         {question.is_required && <span className="text-red-500 ml-1 font-bold">*</span>}
                       </Label>
                       {question.description && (
