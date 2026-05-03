@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Edit2, Loader2, Copy, Check, Share2, Trash2, HelpCircle, FileQuestion, MessageSquare, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiUrl } from '@/lib/api';
 import { useAuth } from "@/contexts/AuthContext";
 import { Layout } from "@/components/layout/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";

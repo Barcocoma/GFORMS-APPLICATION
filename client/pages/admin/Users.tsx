@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { apiUrl } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { User, CreateUserRequest } from '@shared/api';
 import { AdminLayout } from '@/components/layout/AdminLayout';

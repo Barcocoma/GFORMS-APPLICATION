@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Question } from "./FormEditor";
+import { apiUrl } from '@/lib/api';
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2, MessageSquare, Share2, FileQuestion, Star, Heart, ThumbsUp, Edit2, Trash2, Eye, Award } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";

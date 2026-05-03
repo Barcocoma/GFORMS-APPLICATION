@@ -1,6 +1,7 @@
 import { MoreVertical, Edit2, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { apiUrl } from '@/lib/api';
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/components/ui/use-toast";
 import {

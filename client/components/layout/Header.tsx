@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Plus, LogOut, User, Settings, FileText, Search, Bell, Check, CheckCheck, UserCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiUrl } from '@/lib/api';
 import { useAuth } from "@/contexts/AuthContext";
 import {
   DropdownMenu,

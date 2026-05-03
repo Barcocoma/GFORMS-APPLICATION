@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { apiUrl } from '@/lib/api';
 import { User, LoginRequest, LoginResponse, UpdateProfileRequest, UpdateProfileResponse } from '@shared/api';
 
 interface AuthContextType {

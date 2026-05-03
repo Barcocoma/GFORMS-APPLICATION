@@ -147,6 +147,7 @@ export interface CreateFormRequest {
   email_notifications_enabled?: boolean; // Enable email notifications
   email_notification_recipients?: string; // Comma-separated email addresses
   send_confirmation_email?: boolean; // Send confirmation email to submitter
+  requires_login?: boolean; // Require login to submit shared form
 }
 
 export interface CreateFormResponse {
