@@ -6,6 +6,7 @@ import { QuestionBuilder } from "./QuestionBuilder";
 import { ResponsesView } from "./ResponsesView";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiUrl } from '@/lib/api';
 import { CreateFormRequest, CreateFormResponse, FormQuestion, ConditionalLogic } from "@shared/api";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -794,7 +795,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
     
     try {
       setIsLoading(true);
-      const response = await fetch(`/api/forms/${currentFormId}`, {
+      const response = await fetch(apiUrl(`/api/forms/${currentFormId}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -1277,7 +1278,7 @@ export function FormEditor({ formId: initialFormId, template: initialTemplate }:
       const url = isEditMode ? `/api/forms/${currentFormId}` : '/api/forms';
       const method = isEditMode ? 'PUT' : 'POST';
 
-      const response = await fetch(url, {
+      const response = await fetch(apiUrl(url), {
         method: method,
         headers: {
           'Authorization': `Bearer ${token}`,

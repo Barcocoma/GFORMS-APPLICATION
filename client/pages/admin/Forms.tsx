@@ -25,7 +25,7 @@ export default function AdminForms() {
   const fetchForms = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/admin/forms', {
+      const response = await fetch(apiUrl('/api/admin/forms'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

@@ -59,7 +59,7 @@ export function FormCard({
   const handleDeleteConfirm = async () => {
     try {
       setIsDeleting(true);
-      const response = await fetch(`/api/forms/${id}`, {
+      const response = await fetch(apiUrl(`/api/forms/${id}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

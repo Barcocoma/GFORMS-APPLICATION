@@ -85,7 +85,7 @@ export default function FormDetail() {
         return;
       }
 
-      const response = await fetch(`/api/forms/${formId}`, {
+      const response = await fetch(apiUrl(`/api/forms/${formId}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -135,7 +135,7 @@ export default function FormDetail() {
     
     setIsUpdatingRequiresLogin(true);
     try {
-      const response = await fetch(`/api/forms/${form.id}`, {
+      const response = await fetch(apiUrl(`/api/forms/${form.id}`), {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -189,7 +189,7 @@ export default function FormDetail() {
         return;
       }
 
-      const response = await fetch(`/api/forms/${form.id}/responses/export`, {
+      const response = await fetch(apiUrl(`/api/forms/${form.id}/responses/export`), {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -290,7 +290,7 @@ export default function FormDetail() {
     
     try {
       setIsDeleting(true);
-      const response = await fetch(`/api/forms/${formId}`, {
+      const response = await fetch(apiUrl(`/api/forms/${formId}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

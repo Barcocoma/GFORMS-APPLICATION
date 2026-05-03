@@ -24,7 +24,7 @@ export default function AdminSubmissions() {
   const fetchSubmissions = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/admin/submissions', {
+      const response = await fetch(apiUrl('/api/admin/submissions'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

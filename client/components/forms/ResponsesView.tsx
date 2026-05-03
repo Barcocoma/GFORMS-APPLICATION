@@ -80,7 +80,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
   const fetchResponses = async () => {
     try {
     setIsLoading(true);
-      const response = await fetch(`/api/forms/${formId}/responses`, {
+      const response = await fetch(apiUrl(`/api/forms/${formId}/responses`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -120,7 +120,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
     
     setIsSaving(true);
     try {
-      const response = await fetch(`/api/forms/${formId}/responses/${editingResponse.id}`, {
+      const response = await fetch(apiUrl(`/api/forms/${formId}/responses/${editingResponse.id}`), {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -157,7 +157,7 @@ export function ResponsesView({ questions, formId, isQuiz = false }: ResponsesVi
     
     setIsDeleting(true);
     try {
-      const response = await fetch(`/api/forms/${formId}/responses/${deletingResponseId}`, {
+      const response = await fetch(apiUrl(`/api/forms/${formId}/responses/${deletingResponseId}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`

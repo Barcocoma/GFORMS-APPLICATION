@@ -56,7 +56,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
     if (!token) return;
     
     try {
-      const response = await fetch('/api/notifications', {
+      const response = await fetch(apiUrl('/api/notifications'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -77,7 +77,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
     if (!token) return;
     
     try {
-      const response = await fetch('/api/notifications/unread-count', {
+      const response = await fetch(apiUrl('/api/notifications/unread-count'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -97,7 +97,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
     if (!token) return;
     
     try {
-      const response = await fetch(`/api/notifications/${notificationId}/read`, {
+      const response = await fetch(apiUrl(`/api/notifications/${notificationId}/read`), {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -120,7 +120,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
     if (!token) return;
     
     try {
-      const response = await fetch('/api/notifications/read-all', {
+      const response = await fetch(apiUrl('/api/notifications/read-all'), {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -153,7 +153,7 @@ export function Header({ isSidebarMinimized, onToggleSidebar }: HeaderProps) {
       
       // Setup SSE connection for real-time updates
       // Note: EventSource doesn't support custom headers, so we pass token as query param
-      const eventSourceUrl = `/api/notifications/stream?token=${encodeURIComponent(token)}`;
+      const eventSourceUrl = apiUrl(`/api/notifications/stream?token=${encodeURIComponent(token)}`);
       const es = new EventSource(eventSourceUrl);
       
       es.onopen = () => {

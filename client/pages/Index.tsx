@@ -189,7 +189,7 @@ export default function Index() {
   const fetchForms = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/user/forms', {
+      const response = await fetch(apiUrl('/api/user/forms'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

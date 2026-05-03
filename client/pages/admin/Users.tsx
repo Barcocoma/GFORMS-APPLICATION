@@ -49,7 +49,7 @@ export default function AdminUsers() {
   const fetchUsers = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/admin/users', {
+      const response = await fetch(apiUrl('/api/admin/users'), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -128,7 +128,7 @@ export default function AdminUsers() {
 
       for (const user of userList) {
         try {
-          const response = await fetch('/api/admin/users', {
+          const response = await fetch(apiUrl('/api/admin/users'), {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${token}`,
